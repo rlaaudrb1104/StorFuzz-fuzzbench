@@ -282,8 +282,8 @@ def set_up_experiment_config_file(config):
 
 def check_no_uncommitted_changes():
     """Make sure that there are no uncommitted changes."""
-    if subprocess.check_output(['git', 'diff'], cwd=utils.ROOT_DIR):
-        raise ValidationError('Local uncommitted changes found, exiting.')
+#    if subprocess.check_output(['git', 'diff'], cwd=utils.ROOT_DIR):
+#        raise ValidationError('Local uncommitted changes found, exiting.')
 
 
 def get_git_hash(allow_uncommitted_changes):

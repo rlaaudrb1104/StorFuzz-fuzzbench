@@ -47,7 +47,8 @@ RUN cd /tmp/ && \
 
 # Install common python dependencies.
 COPY ./requirements.txt /tmp
-RUN pip install -r /tmp/requirements.txt
+RUN pip install --upgrade pip && \
+    pip install -r /tmp/requirements.txt
 
 # Install dependencies required by google-cloud-cli.
 RUN apt-get update && \
