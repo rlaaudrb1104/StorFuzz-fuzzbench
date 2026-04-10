@@ -160,10 +160,9 @@ RUN /llvm-project/LLVM-11.1.0-Linux.sh --skip-license --prefix=/usr/local
 RUN mkdir -p /angora && \
     cd /angora && \
     git clone \
-        --branch angora-snappy \
         --recursive \
         # 여기서 받아오는데 이걸 Reusing으로 바꿨을 때 어떻게 되는지 체크 필요할 듯 함.
-        https://github.com/vusec/snappy \
+        https://github.com/lysgoup/Reusing_mut.git \
         source && \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     cmake -Ssource -Bbuild \

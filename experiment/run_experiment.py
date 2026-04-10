@@ -39,6 +39,7 @@ from common import logs
 from common import new_process
 from common import utils
 from common import yaml_utils
+from datetime import datetime
 
 BENCHMARKS_DIR = os.path.join(utils.ROOT_DIR, 'benchmarks')
 FUZZERS_DIR = os.path.join(utils.ROOT_DIR, 'fuzzers')
@@ -479,7 +480,8 @@ class LocalDispatcher(BaseDispatcher):
 
     def start(self):
         """Start the experiment on the dispatcher."""
-        container_name = 'dispatcher-container'
+        now = datetime.now()
+        container_name = 'dispatcher-container-' + now.strftime("%Y-%m-%d_%H-%M-%S")
         experiment_filestore_path = os.path.abspath(
             self.config['experiment_filestore'])
         filesystem.create_directory(experiment_filestore_path)
