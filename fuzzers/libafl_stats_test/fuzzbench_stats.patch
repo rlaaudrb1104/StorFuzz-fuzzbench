@@ -1,0 +1,64 @@
+--- a/fuzzers/fuzzbench/src/lib.rs
++++ b/fuzzers/fuzzbench/src/lib.rs
+@@ -23,7 +23,7 @@ use libafl::{
+     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
+     fuzzer::{Fuzzer, StdFuzzer},
+     inputs::{BytesInput, HasTargetBytes},
+-    monitors::SimpleMonitor,
++    monitors::{SimpleMonitor, OnDiskTOMLMonitor},
+     mutators::{
+         scheduled::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
+         StdMOptMutator, StdScheduledMutator, Tokens,
+@@ -140,6 +140,9 @@ pub extern "C" fn libafl_main() {
+             return;
+         }
+     }
++
++    let stats_file = out_dir.clone().join("stats.toml");
++
+     let mut crashes = out_dir.clone();
+     crashes.push("crashes");
+     out_dir.push("queue");
+@@ -166,7 +169,7 @@ pub extern "C" fn libafl_main() {
+             .expect("Could not parse timeout in milliseconds"),
+     );
+ 
+-    fuzz(out_dir, crashes, &in_dir, tokens, &logfile, timeout)
++    fuzz(out_dir, crashes, &in_dir, tokens, &logfile, timeout, &stats_file)
+         .expect("An error occurred while fuzzing");
+ }
+ 
+@@ -202,6 +205,7 @@ fn fuzz(
+     tokenfile: Option<PathBuf>,
+     logfile: &PathBuf,
+     timeout: Duration,
++    stats_file: &PathBuf,
+ ) -> Result<(), Error> {
+     let log = RefCell::new(OpenOptions::new().append(true).create(true).open(logfile)?);
+ 
+@@ -214,13 +218,18 @@ fn fuzz(
+     let file_null = File::open("/dev/null")?;
+ 
+     // 'While the monitor are state, they are usually used in the broker - which is likely never restarted
+-    let monitor = SimpleMonitor::new(|s| {
+-        #[cfg(unix)]
+-        writeln!(&mut stdout_cpy, "{s}").unwrap();
+-        #[cfg(windows)]
+-        println!("{s}");
+-        writeln!(log.borrow_mut(), "{:?} {s}", current_time()).unwrap();
+-    });
++    let monitor = OnDiskTOMLMonitor::new(
++        stats_file,
++        SimpleMonitor::with_user_monitor(
++            |s| {
++                #[cfg(unix)]
++                writeln!(&mut stdout_cpy, "{s}").unwrap();
++                #[cfg(windows)]
++                println!("{s}");
++                writeln!(log.borrow_mut(), "{:?} {s}", current_time()).unwrap();
++            }
++        )
++    );
+ 
+     // We need a shared map to store our state before a crash.
+     // This way, we are able to continue fuzzing afterwards.

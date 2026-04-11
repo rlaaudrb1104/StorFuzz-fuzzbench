@@ -1,0 +1,32 @@
+diff --git a/fuzzers/forkserver_libafl_cc/src/main.rs b/fuzzers/forkserver_libafl_cc/src/main.rs
+index 0ee745a6..bd5825af 100644
+--- a/fuzzers/forkserver_libafl_cc/src/main.rs
++++ b/fuzzers/forkserver_libafl_cc/src/main.rs
+@@ -10,7 +10,7 @@ use libafl::{
+     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
+     fuzzer::{Fuzzer, StdFuzzer},
+     inputs::BytesInput,
+-    monitors::SimpleMonitor,
++    monitors::{SimpleMonitor, OnDiskTOMLMonitor},
+     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
+     observers::{CanTrack, HitcountsMapObserver, StdMapObserver, TimeObserver},
+     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
+@@ -146,10 +146,15 @@ pub fn main() {
+     )
+     .unwrap();
+ 
++    let stats_file = opt.output_dir.join("stats.toml");
++
+     // The Monitor trait define how the fuzzer stats are reported to the user
+-    let monitor = SimpleMonitor::with_user_monitor(|s| {
+-        println!("{s}");
+-    });
++    let monitor = OnDiskTOMLMonitor::new(
++        &stats_file,
++        SimpleMonitor::with_user_monitor(|s| {
++            println!("{s}");
++        }),
++    );
+ 
+     // The event manager handle the various events generated during the fuzzing loop
+     let mut mgr = SimpleEventManager::new(monitor);
