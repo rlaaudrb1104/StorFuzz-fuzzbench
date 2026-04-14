@@ -167,8 +167,6 @@ RUN which llvm-config && llvm-config --version || \
 RUN mkdir -p /angora && \
     cd /angora && \
     git clone \
-        --branch angora-snappy \
-        --recursive \
         https://github.com/lysgoup/Angora_original.git \
         source && \
     cd source && \
