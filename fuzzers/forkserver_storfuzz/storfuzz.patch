@@ -1,0 +1,282 @@
+diff --git a/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs b/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs
+index 21ab9936..defb8539 100644
+--- a/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs
++++ b/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs
+@@ -1,6 +1,6 @@
+ use std::env;
+ 
+-use libafl_cc::{ClangWrapper, CompilerWrapper, ToolWrapper};
++use libafl_cc::{ClangWrapper, CompilerWrapper, LLVMPasses, ToolWrapper};
+ 
+ pub fn main() {
+     let args: Vec<String> = env::args().collect();
+@@ -17,12 +17,22 @@ pub fn main() {
+         dir.pop();
+ 
+         let mut cc = ClangWrapper::new();
++
++        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
++        cc.add_pass(LLVMPasses::AutoTokens);
++        
+         if let Some(code) = cc
+             .cpp(is_cpp)
+             // silence the compiler wrapper output, needed for some configure scripts.
+             .silence(true)
++            // Always instrument: forkserver is injected via .init_array constructor,
++            // so every compiled binary must have the passes and library linked.
++            // __AFL_SHM_ID guard in libafl_start_forkserver() prevents configure
++            // test programs from crashing when the fuzzer is not running.
++            .need_libafl_arg(false)
+             .parse_args(&args)
+             .expect("Failed to parse the command line")
++            .add_pass(LLVMPasses::StorFuzzCoverage)
+             // Enable libafl's coverage instrumentation
+             .add_arg("-fsanitize-coverage=trace-pc-guard")
+             // Imitate afl-cc's compile definitions 
+diff --git a/fuzzers/forkserver_libafl_cc/src/lib.rs b/fuzzers/forkserver_libafl_cc/src/lib.rs
+index 2646c42b..7a9b4761 100644
+--- a/fuzzers/forkserver_libafl_cc/src/lib.rs
++++ b/fuzzers/forkserver_libafl_cc/src/lib.rs
+@@ -1,9 +1,22 @@
+-use libafl_targets::{map_shared_memory, start_forkserver};
++use libafl_targets::{map_shared_memory, map_storfuzz_shared_memory, start_forkserver};
++
++/// Called automatically before main() via .init_array, so targets without
++/// __AFL_INIT() (e.g. unibench binaries) also get a forkserver.
++#[no_mangle]
++#[link_section = ".init_array"]
++pub static FORKSERVER_INIT: extern "C" fn() = libafl_start_forkserver;
+ 
+ #[no_mangle]
+ pub extern "C" fn libafl_start_forkserver() {
++    // Only start the forkserver when the fuzzer has set up shared memory.
++    // This prevents configure/build-time test binaries from exiting with an error.
++    if std::env::var("__AFL_SHM_ID").is_err() {
++        return;
++    }
+     // Map shared memory region for the edge coverage map
+     map_shared_memory();
++    // Map shared memory region for the StorFuzz data map (no-op if not set)
++    map_storfuzz_shared_memory();
+     // Start the forkserver
+     start_forkserver();
+ }
+diff --git a/fuzzers/forkserver_libafl_cc/src/main.rs b/fuzzers/forkserver_libafl_cc/src/main.rs
+index 5b131120..b225ddb5 100644
+--- a/fuzzers/forkserver_libafl_cc/src/main.rs
++++ b/fuzzers/forkserver_libafl_cc/src/main.rs
+@@ -3,11 +3,11 @@ use std::path::PathBuf;
+ 
+ use clap::Parser;
+ use libafl::{
+-    corpus::{Corpus, InMemoryCorpus, OnDiskCorpus},
++    corpus::{Corpus, OnDiskCorpus},
+     events::SimpleEventManager,
+     executors::{forkserver::ForkserverExecutor, HasObservers},
+     feedback_and_fast, feedback_or,
+-    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
++    feedbacks::{AflMapFeedback, CrashFeedback, MaxMapFeedback, TimeFeedback},
+     fuzzer::{Fuzzer, StdFuzzer},
+     inputs::BytesInput,
+     monitors::SimpleMonitor,
+@@ -24,7 +24,7 @@ use libafl_bolts::{
+     tuples::{tuple_list, Handled, MatchNameRef, Merge},
+     AsSliceMut, Truncate,
+ };
+-use libafl_targets::EDGES_MAP_SIZE_IN_USE;
++use libafl_targets::{EDGES_MAP_SIZE_IN_USE, STORFUZZ_MAP_SIZE};
+ use nix::sys::signal::Signal;
+ 
+ /// The commandline args this fuzzer accepts
+@@ -81,6 +81,14 @@ struct Opt {
+         default_value = "SIGKILL"
+     )]
+     signal: Signal,
++
++    #[arg(
++        help = "Output directory for queue and crashes (created if absent)",
++        short = 'o',
++        long = "output-dir",
++        default_value = "./output"
++    )]
++    output_dir: PathBuf,
+ }
+ 
+ #[allow(clippy::similar_names)]
+@@ -92,6 +100,11 @@ pub fn main() {
+ 
+     let corpus_dirs: Vec<PathBuf> = [opt.in_dir].to_vec();
+ 
++    let queue_dir = opt.output_dir.join("queue");
++    let crashes_dir = opt.output_dir.join("crashes");
++    std::fs::create_dir_all(&queue_dir).expect("Failed to create queue dir");
++    std::fs::create_dir_all(&crashes_dir).expect("Failed to create crashes dir");
++
+     // The unix shmem provider supported by LibAFL for shared memory
+     let mut shmem_provider = UnixShMemProvider::new().unwrap();
+ 
+@@ -103,19 +116,31 @@ pub fn main() {
+     // the next line is not needed
+     // unsafe { EDGES_MAP_PTR = shmem_buf.as_mut_ptr() };
+ 
++    // The StorFuzz data coverage map shared between observer and executor
++    let mut data_shmem = shmem_provider.new_shmem(STORFUZZ_MAP_SIZE).unwrap();
++    data_shmem.write_to_env("__STORFUZZ_SHM_ID").unwrap();
++    let data_shmem_buf = data_shmem.as_slice_mut();
++
+     // Create an observation channel using the signals map
+     let edges_observer = unsafe {
+         HitcountsMapObserver::new(StdMapObserver::new("shared_mem", shmem_buf)).track_indices()
+     };
+ 
++    // Create an observation channel for the StorFuzz data map
++    let data_observer = unsafe { StdMapObserver::new("data", data_shmem_buf) };
++
+     // Create an observation channel to keep track of the execution time
+     let time_observer = TimeObserver::new("time");
+ 
+     // Feedback to rate the interestingness of an input
+     // This one is composed by two Feedbacks in OR
++    let mut data_feedback = AflMapFeedback::new(&data_observer);
++    data_feedback.set_is_bitmap(true);
+     let mut feedback = feedback_or!(
+         // New maximization map feedback linked to the edges observer and the feedback state
+         MaxMapFeedback::new(&edges_observer),
++        // StorFuzz data coverage feedback (bitmap-based)
++        data_feedback,
+         // Time feedback, this one does not need a feedback state
+         TimeFeedback::new(&time_observer)
+     );
+@@ -134,11 +159,10 @@ pub fn main() {
+     let mut state = StdState::new(
+         // RNG
+         StdRand::new(),
+-        // Corpus that will be evolved, we keep it in memory for performance
+-        InMemoryCorpus::<BytesInput>::new(),
+-        // Corpus in which we store solutions (crashes in this example),
+-        // on disk so the user can get them after stopping the fuzzer
+-        OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
++        // Corpus that will be evolved, saved to disk so it persists across runs
++        OnDiskCorpus::<BytesInput>::new(&queue_dir).unwrap(),
++        // Corpus in which we store solutions (crashes)
++        OnDiskCorpus::<BytesInput>::new(&crashes_dir).unwrap(),
+         // States of the feedbacks.
+         // The feedbacks can report the data that should persist in the State.
+         &mut feedback,
+@@ -180,7 +204,7 @@ pub fn main() {
+         .coverage_map_size(MAP_SIZE)
+         .timeout(Duration::from_millis(opt.timeout))
+         .kill_signal(opt.signal)
+-        .build(tuple_list!(time_observer, edges_observer))
++        .build(tuple_list!(time_observer, edges_observer, data_observer))
+         .unwrap();
+ 
+     if let Some(dynamic_map_size) = executor.coverage_map_size() {
+diff --git a/libafl_targets/src/forkserver.c b/libafl_targets/src/forkserver.c
+index 94ebc00e..249ed0de 100644
+--- a/libafl_targets/src/forkserver.c
++++ b/libafl_targets/src/forkserver.c
+@@ -26,6 +26,7 @@
+ #define SHMEM_FUZZ_HDR_SIZE 4
+ #define SHM_ENV_VAR "__AFL_SHM_ID"
+ #define SHM_FUZZ_ENV_VAR "__AFL_SHM_FUZZ_ID"
++#define STORFUZZ_SHM_ENV_VAR "__STORFUZZ_SHM_ID"
+ #define DEFAULT_PERMISSION 0600
+ 
+ /* Reporting errors */
+@@ -68,6 +69,8 @@ extern uint8_t *__afl_area_ptr;
+ extern size_t   __afl_map_size;
+ extern uint8_t *__token_start;
+ extern uint8_t *__token_stop;
++extern uint8_t *__storfuzz_area_ptr;
++extern size_t   __storfuzz_map_size;
+ 
+ uint8_t        *__afl_fuzz_ptr;
+ static uint32_t __afl_fuzz_len_local;
+@@ -169,6 +172,44 @@ void __afl_map_shm(void) {
+   }
+ }
+ 
++void __afl_map_storfuzz_shm(void) {
++  char *id_str = getenv(STORFUZZ_SHM_ENV_VAR);
++  if (!id_str) return;
++
++#ifdef USEMMAP
++  const char    *shm_file_path = id_str;
++  int            shm_fd = -1;
++  unsigned char *shm_base = NULL;
++
++  shm_fd = shm_open(shm_file_path, O_RDWR, DEFAULT_PERMISSION);
++  if (shm_fd == -1) {
++    fprintf(stderr, "shm_open() failed for storfuzz map\n");
++    exit(1);
++  }
++
++  shm_base = mmap(0, __storfuzz_map_size, PROT_READ | PROT_WRITE, MAP_SHARED,
++                  shm_fd, 0);
++  close(shm_fd);
++
++  if (shm_base == MAP_FAILED) {
++    fprintf(stderr, "mmap() failed for storfuzz map\n");
++    exit(2);
++  }
++
++  __storfuzz_area_ptr = shm_base;
++#else
++  uint32_t shm_id = atoi(id_str);
++  __storfuzz_area_ptr = (uint8_t *)shmat(shm_id, NULL, 0);
++
++  if (!__storfuzz_area_ptr || __storfuzz_area_ptr == (void *)-1) {
++    perror("shmat for storfuzz map");
++    exit(1);
++  }
++#endif
++
++  __storfuzz_area_ptr[0] = 1;
++}
++
+ static void map_input_shared_memory() {
+   char *id_str = getenv(SHM_FUZZ_ENV_VAR);
+ 
+@@ -343,6 +384,11 @@ void __afl_start_forkserver(void) {
+ 
+         close(FORKSRV_FD);
+         close(FORKSRV_FD + 1);
++
++        /* Clear StorFuzz map before target execution (OR-bitmap must be reset). */
++        if (__storfuzz_area_ptr)
++          memset(__storfuzz_area_ptr, 0, __storfuzz_map_size);
++
+         return;
+       }
+ 
+diff --git a/libafl_targets/src/forkserver.rs b/libafl_targets/src/forkserver.rs
+index ed9a595c..6b0b94e9 100644
+--- a/libafl_targets/src/forkserver.rs
++++ b/libafl_targets/src/forkserver.rs
+@@ -3,6 +3,8 @@
+ extern "C" {
+     /// Map a shared memory region for the edge coverage map.
+     fn __afl_map_shm();
++    /// Map a shared memory region for the StorFuzz data map.
++    fn __afl_map_storfuzz_shm();
+     /// Start the forkserver.
+     fn __afl_start_forkserver();
+ }
+@@ -16,6 +18,16 @@ pub fn map_shared_memory() {
+     unsafe { __afl_map_shm() }
+ }
+ 
++/// Map a shared memory region for the StorFuzz data map.
++///
++/// # Note
++///
++/// The function's logic is written in C and this code is a wrapper.
++/// If `__STORFUZZ_SHM_ID` is not set, this function is a no-op.
++pub fn map_storfuzz_shared_memory() {
++    unsafe { __afl_map_storfuzz_shm() }
++}
++
+ /// Start the forkserver from this point. Any shared memory must be created before.
+ ///
+ /// # Note
