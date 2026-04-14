@@ -1,0 +1,237 @@
+# fuzzers/angora/builder.Dockerfile.full
+# ─────────────────────────────────────────────────────────────
+# 이 파일은 prebuild.sh에서 1회만 사용됨. 
+# 실험 시에는 builder.Dockerfile (경량 버전)이 사용됨.
+# ─────────────────────────────────────────────────────────────
+
+# NOTE: base-image에서 Python을 복사하지 않으므로 참조 불필요
+# (시스템 python3 사용으로 glibc 불일치 문제 해결)
+
+FROM ubuntu:xenial AS libunwind-builder
+
+RUN apt-get update && \
+    apt-get install -y \
+        git \
+        build-essential \
+        autoconf \
+        libtool
+
+RUN git clone https://github.com/libunwind/libunwind.git /libunwind && \
+    cd /libunwind && \
+    git checkout v1.6.2 && \
+    autoreconf --install && \
+    ./configure --enable-static --enable-shared --enable-setjmp=no && \
+    make -j && \
+    make install DESTDIR=/tmp/libunwind_prefix && \
+    mkdir /libunwind_build && \
+    cd /libunwind_build && \
+    tar --directory=/tmp/libunwind_prefix -cf libunwind.tar.gz usr && \
+    rm -rf /libunwind /tmp/libunwind_prefix
+
+FROM ubuntu:xenial AS llvm-builder-deps
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y git python3
+
+RUN mkdir -p /llvm-project && \
+    cd /llvm-project && \
+    git clone --depth 1 https://github.com/llvm/llvm-project.git \
+        --branch release/11.x \
+        source
+
+RUN apt-get install -y \
+        software-properties-common \
+        apt-transport-https \
+        wget
+
+# CMake binary install
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.22.1/cmake-3.22.1-linux-x86_64.tar.gz && \
+    tar -zxvf cmake-3.22.1-linux-x86_64.tar.gz && \
+    cp -r cmake-3.22.1-linux-x86_64/bin /usr/local/ && \
+    cp -r cmake-3.22.1-linux-x86_64/share /usr/local/ && \
+    rm -rf cmake-3.22.1-linux-x86_64.tar.gz cmake-3.22.1-linux-x86_64
+
+# NOTE: Python venv 제거됨 — system python3으로 cmake 빌드 충분
+# (기존: base-image에서 Python 3.10 복사 + venv → glibc 불일치 문제)
+
+RUN apt-get install -y \
+        build-essential \
+        ninja-build
+
+COPY 0001-Add-Custom-sanitizer.patch \
+    /llvm-project/
+COPY 0001-Ignore-STACKMAP-instruction-in-x87-stackifier.patch \
+    /llvm-project/
+COPY 0001-XRay-compiler-rt-x86_64-Fix-CFI-directives-in-assemb.patch \
+    /llvm-project/
+COPY 0001-DFSan-Fix-call-to-__dfsan_mem_transfer_callback.patch \
+    /llvm-project/
+RUN cd /llvm-project/source && \
+    git apply ../*.patch
+
+FROM llvm-builder-deps AS llvm-builder
+
+RUN cd /llvm-project && \
+    cmake -Ssource/llvm -Bbuild-assert \
+        -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DLLVM_ENABLE_PROJECTS='clang;compiler-rt;lld' \
+        -DLLVM_TARGETS_TO_BUILD='X86' \
+        -DLLVM_PARALLEL_LINK_JOBS=2 \
+        -DLLVM_ENABLE_ASSERTIONS=ON && \
+    # CPU, RAM 사용량에 따라 조절해서 사용할것 -> -j 64
+    cmake --build build-assert -- -j 64 && \
+    cd build-assert && \
+    cpack -G "STGZ" && \
+    cd /llvm-project && \
+    mv build-assert/LLVM-11.1.0-Linux.sh . && \
+    rm -rf build-assert
+
+FROM llvm-builder-deps AS fuzzer-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y \
+        libc++-dev \
+        libc++abi-dev \
+        curl \
+        lsb-release \
+        ca-certificates \
+        gnupg \
+        apt-utils \
+        zlib1g-dev \
+        libgcrypt-dev \
+        libmount-dev \
+        pkg-config \
+    && \
+    mkdir -p ~/.ssh && \
+    ssh-keyscan github.com >> ~/.ssh/known_hosts && \
+    ssh-keyscan bitbucket.org >> ~/.ssh/known_hosts
+
+# Rust nightly
+# [변경] Corrosion 제거: CMake+Cargo 연동 도구였으나 build/build.sh는 cargo를 직접 호출하므로 불필요
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        > /tmp/rustup-init.sh && \
+    sh /tmp/rustup-init.sh -y --default-toolchain nightly && \
+    rm /tmp/rustup-init.sh
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# DFSan ABI lists
+RUN mkdir /extra_abilists && \
+    nm --dynamic /usr/lib/x86_64-linux-gnu/libz.so \
+        | awk '{ if ($2 == "T") print "fun:" $3 "=uninstrumented" }' \
+        > /extra_abilists/libz_abilist.txt && \
+    nm --dynamic /usr/lib/x86_64-linux-gnu/libgcrypt.so \
+        | awk '{ if ($2 == "T") print "fun:" $3 "=uninstrumented" }' \
+        > /extra_abilists/libgcrypt_abilist.txt && \
+    nm --dynamic /usr/lib/x86_64-linux-gnu/libmount.so \
+        | awk '{ if ($2 == "T") print "fun:" $3 "=uninstrumented" }' \
+        > /extra_abilists/libmount_abilist.txt && \
+    echo "fun:inflateInit2_=uninstrumented" >> /extra_abilists/libz_abilist.txt && \
+    echo "fun:inflateEnd=uninstrumented" >> /extra_abilists/libz_abilist.txt && \
+    echo "fun:inflateReset=uninstrumented" >> /extra_abilists/libz_abilist.txt && \
+    echo "fun:inflate=uninstrumented" >> /extra_abilists/libz_abilist.txt && \
+    echo "fun:crc32=uninstrumented" >> /extra_abilists/libz_abilist.txt
+
+COPY --from=libunwind-builder /libunwind_build/libunwind.tar.gz /tmp/
+RUN cd / && \
+    tar xf /tmp/libunwind.tar.gz && \
+    ldconfig
+
+COPY --from=llvm-builder /llvm-project/LLVM-11.1.0-Linux.sh /llvm-project
+RUN /llvm-project/LLVM-11.1.0-Linux.sh --skip-license --prefix=/usr/local
+
+# [추가] dfsan_rt 빌드 스크립트가 python을 요구하나 xenial에는 python3만 존재
+#   python → python3 심링크로 해결
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+# Build Angora fuzzer
+# [변경] cmake/cpack 방식 → Angora 원본의 build/build.sh 방식으로 변경
+#   - PREFIX=/angora/bin 으로 고정하여 결과물 위치를 예측 가능하게 함
+#   - build/build.sh 내부에서 cargo build(fuzzer 바이너리) + llvm_mode cmake(컴파일러 래퍼) 수행
+#   - cpack 기반 설치 패키지(Angora-1.2.2-Linux.sh) 생성 과정 제거
+COPY 0001-Disable-UnfoldBranchPass.patch /tmp/
+# [추가] DFSanPass.cc의 void 반환에 ZExt 속성을 잘못 붙이는 버그 수정
+#   release/11.x 브랜치(post-11.1.0)에서 verifier가 이를 체크하기 시작해 ICE 발생
+#   Call->addAttribute(0, Attribute::ZExt) → index 0은 return value
+#   void 반환에 ZExt는 invalid IR이므로 제거
+COPY 0002-Fix-DFSanPass-ZExt-on-void-return.patch /tmp/
+# [추가] build/build.sh 실행 전 llvm-config 존재 여부 확인
+#   없으면 build.sh가 자체 LLVM을 설치해버리므로 패치된 LLVM 11이 무시됨
+#   빌드를 명시적으로 실패시켜 문제를 즉시 감지
+RUN which llvm-config && llvm-config --version || \
+    (echo "ERROR: llvm-config not found. Patched LLVM 11 must be installed before building Angora." && exit 1)
+RUN mkdir -p /angora && \
+    cd /angora && \
+    git clone \
+        --recursive \
+        https://github.com/lysgoup/Reusing_mut.git \
+        source && \
+    cd source && \
+    git apply /tmp/0001-Disable-UnfoldBranchPass.patch && \
+    git apply /tmp/0002-Fix-DFSanPass-ZExt-on-void-return.patch && \
+    PREFIX=/angora/bin CARGO_NET_GIT_FETCH_WITH_CLI=true bash build/build.sh
+
+# [추가] build/build.sh 결과물 경로(/angora/bin)를 PATH에 등록
+#   angora-clang, angora-clang++ 등 이후 빌드 단계에서 사용하기 위함
+ENV PATH="/angora/bin:${PATH}"
+
+# Build plain libcxx
+RUN cd /llvm-project && \
+    cmake -Ssource/llvm -Bbuild-plain \
+        -GNinja \
+        -DCMAKE_INSTALL_PREFIX=/llvm-project/plain-prefix \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DLLVM_ENABLE_PROJECTS='libcxx;libcxxabi' \
+        -DLIBCXX_ENABLE_SHARED=OFF \
+        -DLIBCXXABI_ENABLE_SHARED=OFF && \
+    cmake --build build-plain -- cxx cxxabi && \
+    cd build-plain && \
+    ninja install-cxx install-cxxabi && \
+    cd .. && \
+    rm -rf build-plain
+
+# [변경] angora-clang → /angora/bin/angora-clang 전체 경로로 변경
+#   find_obj()가 argv[0]의 슬래시 유무로 디렉토리를 추출하므로
+#   PATH 경유 호출 시 argv[0]="angora-clang"(슬래시 없음) → FATAL
+#   전체 경로로 호출해야 find_obj가 /angora/bin/pass/libAngoraPass.so를 탐색함
+RUN cd /llvm-project && \
+    /angora/bin/angora-clang -c \
+        source/compiler-rt/lib/fuzzer/standalone/StandaloneFuzzTargetMain.c \
+        -o StandaloneFuzzTargetMainAngoraFast.o && \
+    ar rc libStandaloneFuzzTargetAngoraFast.a \
+        StandaloneFuzzTargetMainAngoraFast.o && \
+    rm StandaloneFuzzTargetMainAngoraFast.o
+
+# Build Angora track libcxx
+RUN cd /llvm-project && \
+    INSTR_FLAGS="$(FLAGS_MODE=1 USE_DFSAN=1 /angora/bin/angora-clang++ --compiler)"; \
+    cmake -Ssource/llvm -Bbuild-track \
+        -GNinja \
+        -DCMAKE_INSTALL_PREFIX=/llvm-project/track-prefix \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DLLVM_ENABLE_PROJECTS='libcxx;libcxxabi' \
+        -DLLVM_USE_SANITIZER='Custom' \
+        -DLLVM_CUSTOM_SANITIZER_FLAGS="$INSTR_FLAGS" \
+        -DLIBCXX_ENABLE_SHARED=OFF \
+        -DLIBCXXABI_ENABLE_SHARED=OFF && \
+    cmake --build build-track -- cxx cxxabi && \
+    cd build-track && \
+    ninja install-cxx install-cxxabi && \
+    cd .. && \
+    rm -rf build-track
+
+RUN cd /llvm-project && \
+    USE_TRACK=1 /angora/bin/angora-clang -c \
+        source/compiler-rt/lib/fuzzer/standalone/StandaloneFuzzTargetMain.c \
+        -o StandaloneFuzzTargetMainAngoraTrack.o && \
+    ar rc libStandaloneFuzzTargetAngoraTrack.a \
+        StandaloneFuzzTargetMainAngoraTrack.o && \
+    rm StandaloneFuzzTargetMainAngoraTrack.o

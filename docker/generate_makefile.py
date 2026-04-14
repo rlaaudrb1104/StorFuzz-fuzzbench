@@ -155,7 +155,11 @@ def generate_makefile():
     benchmarks = benchmark_utils.get_all_benchmarks()
     buildable_images = docker_images.get_images_to_build(fuzzers, benchmarks)
 
-    makefile = 'export DOCKER_BUILDKIT := 1\n\n'
+    # [변경] DOCKER_BUILDKIT 1 → 0
+    # BuildKit(1)은 docker buildx 플러그인이 필요하나 컨테이너 내부의
+    # docker.io 기본 설치에는 buildx가 없어 빌드 실패함
+    # 기능상 차이 없으므로 기본 엔진(0)으로 변경
+    makefile = 'export DOCKER_BUILDKIT := 0\n\n'
 
     # Print oss-fuzz benchmarks property variables.
     makefile += _get_benchmark_fuzz_target(benchmarks)

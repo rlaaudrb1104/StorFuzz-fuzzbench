@@ -29,8 +29,8 @@ RUN git clone \
         --branch v1.2.13 \
         https://github.com/madler/zlib.git
 
-RUN git clone \
-        https://github.com/glennrp/libpng.git
+RUN git clone -b master \
+        https://github.com/pnggroup/libpng.git
 RUN cp libpng/contrib/oss-fuzz/build.sh $SRC
 
 WORKDIR libpng

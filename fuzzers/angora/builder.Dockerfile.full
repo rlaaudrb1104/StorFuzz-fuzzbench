@@ -112,24 +112,12 @@ RUN apt-get update && \
     ssh-keyscan bitbucket.org >> ~/.ssh/known_hosts
 
 # Rust nightly
+# [변경] Corrosion 제거: CMake+Cargo 연동 도구였으나 build/build.sh는 cargo를 직접 호출하므로 불필요
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         > /tmp/rustup-init.sh && \
     sh /tmp/rustup-init.sh -y --default-toolchain nightly && \
     rm /tmp/rustup-init.sh
 ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Corrosion
-RUN mkdir -p /corrosion && \
-    cd /corrosion && \
-    git clone https://github.com/AndrewGaspar/corrosion.git source && \
-    . /root/.cargo/env && \
-    cmake -Ssource -Bbuild \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCORROSION_BUILD_TESTS=OFF && \
-    cmake --build build -- -j && \
-    cd build && \
-    make install && \
-    rm -rf /corrosion
 
 # DFSan ABI lists
 RUN mkdir /extra_abilists && \
@@ -156,32 +144,41 @@ RUN cd / && \
 COPY --from=llvm-builder /llvm-project/LLVM-11.1.0-Linux.sh /llvm-project
 RUN /llvm-project/LLVM-11.1.0-Linux.sh --skip-license --prefix=/usr/local
 
+# [추가] dfsan_rt 빌드 스크립트가 python을 요구하나 xenial에는 python3만 존재
+#   python → python3 심링크로 해결
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
 # Build Angora fuzzer
+# [변경] cmake/cpack 방식 → Angora 원본의 build/build.sh 방식으로 변경
+#   - PREFIX=/angora/bin 으로 고정하여 결과물 위치를 예측 가능하게 함
+#   - build/build.sh 내부에서 cargo build(fuzzer 바이너리) + llvm_mode cmake(컴파일러 래퍼) 수행
+#   - cpack 기반 설치 패키지(Angora-1.2.2-Linux.sh) 생성 과정 제거
+COPY 0001-Disable-UnfoldBranchPass.patch /tmp/
+# [추가] DFSanPass.cc의 void 반환에 ZExt 속성을 잘못 붙이는 버그 수정
+#   release/11.x 브랜치(post-11.1.0)에서 verifier가 이를 체크하기 시작해 ICE 발생
+#   Call->addAttribute(0, Attribute::ZExt) → index 0은 return value
+#   void 반환에 ZExt는 invalid IR이므로 제거
+COPY 0002-Fix-DFSanPass-ZExt-on-void-return.patch /tmp/
+# [추가] build/build.sh 실행 전 llvm-config 존재 여부 확인
+#   없으면 build.sh가 자체 LLVM을 설치해버리므로 패치된 LLVM 11이 무시됨
+#   빌드를 명시적으로 실패시켜 문제를 즉시 감지
+RUN which llvm-config && llvm-config --version || \
+    (echo "ERROR: llvm-config not found. Patched LLVM 11 must be installed before building Angora." && exit 1)
 RUN mkdir -p /angora && \
     cd /angora && \
     git clone \
         --branch angora-snappy \
         --recursive \
-        # 여기서 받아오는데 이걸 Reusing으로 바꿨을 때 어떻게 되는지 체크 필요할 듯 함.
-        https://github.com/vusec/snappy \
+        https://github.com/lysgoup/Angora_original.git \
         source && \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    cmake -Ssource -Bbuild \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER=clang \
-        -DCMAKE_CXX_COMPILER=clang++ && \
-    cmake --build build -- -j 64 && \
-    cd build && \
-    make install && \
-    cpack -G "STGZ" && \
-    cd /angora && \
-    mv build/Angora-1.2.2-Linux.sh . && \
-    rm -rf build
+    cd source && \
+    git apply /tmp/0001-Disable-UnfoldBranchPass.patch && \
+    git apply /tmp/0002-Fix-DFSanPass-ZExt-on-void-return.patch && \
+    PREFIX=/angora/bin CARGO_NET_GIT_FETCH_WITH_CLI=true bash build/build.sh
 
-COPY 0001-Disable-UnfoldBranchPass.patch \
-    /angora/
-RUN cd /angora/source && \
-    git apply ../*.patch
+# [추가] build/build.sh 결과물 경로(/angora/bin)를 PATH에 등록
+#   angora-clang, angora-clang++ 등 이후 빌드 단계에서 사용하기 위함
+ENV PATH="/angora/bin:${PATH}"
 
 # Build plain libcxx
 RUN cd /llvm-project && \
@@ -200,8 +197,12 @@ RUN cd /llvm-project && \
     cd .. && \
     rm -rf build-plain
 
+# [변경] angora-clang → /angora/bin/angora-clang 전체 경로로 변경
+#   find_obj()가 argv[0]의 슬래시 유무로 디렉토리를 추출하므로
+#   PATH 경유 호출 시 argv[0]="angora-clang"(슬래시 없음) → FATAL
+#   전체 경로로 호출해야 find_obj가 /angora/bin/pass/libAngoraPass.so를 탐색함
 RUN cd /llvm-project && \
-    angora-clang -c \
+    /angora/bin/angora-clang -c \
         source/compiler-rt/lib/fuzzer/standalone/StandaloneFuzzTargetMain.c \
         -o StandaloneFuzzTargetMainAngoraFast.o && \
     ar rc libStandaloneFuzzTargetAngoraFast.a \
@@ -210,7 +211,7 @@ RUN cd /llvm-project && \
 
 # Build Angora track libcxx
 RUN cd /llvm-project && \
-    INSTR_FLAGS="$(FLAGS_MODE=1 USE_DFSAN=1 angora-clang++ --compiler)"; \
+    INSTR_FLAGS="$(FLAGS_MODE=1 USE_DFSAN=1 /angora/bin/angora-clang++ --compiler)"; \
     cmake -Ssource/llvm -Bbuild-track \
         -GNinja \
         -DCMAKE_INSTALL_PREFIX=/llvm-project/track-prefix \
@@ -229,7 +230,7 @@ RUN cd /llvm-project && \
     rm -rf build-track
 
 RUN cd /llvm-project && \
-    USE_TRACK=1 angora-clang -c \
+    USE_TRACK=1 /angora/bin/angora-clang -c \
         source/compiler-rt/lib/fuzzer/standalone/StandaloneFuzzTargetMain.c \
         -o StandaloneFuzzTargetMainAngoraTrack.o && \
     ar rc libStandaloneFuzzTargetAngoraTrack.a \

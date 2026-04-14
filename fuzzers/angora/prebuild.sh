@@ -70,6 +70,7 @@ info "Phase 1: Angora 전체 빌드 (소요: 30분~2시간)"
 info "=========================================="
 
 docker build \
+    --no-cache \
     --target fuzzer-builder \
     -t angora-prebuild:latest \
     -f "$FULL_DOCKERFILE" \
@@ -92,21 +93,15 @@ docker create --name angora-extract angora-prebuild:latest /bin/true
 info "추출: LLVM-11.1.0-Linux.sh"
 docker cp angora-extract:/llvm-project/LLVM-11.1.0-Linux.sh "$CACHE_DIR/"
 
-info "추출: Angora-1.2.2-Linux.sh"
-docker cp angora-extract:/angora/Angora-1.2.2-Linux.sh "$CACHE_DIR/"
+# [변경] Angora-1.2.2-Linux.sh(cpack 패키지) → angora-bin.tar.gz 으로 변경
+#   build/build.sh의 결과물은 /angora/bin/ 아래에 위치하며
+#   fuzzer 바이너리, angora-clang 래퍼, LLVM pass 라이브러리 등이 포함됨
+info "추출: angora-bin.tar.gz (/angora/bin/)"
+docker cp angora-extract:/angora/bin "$CACHE_DIR/angora-bin"
+tar -czf "$CACHE_DIR/angora-bin.tar.gz" -C "$CACHE_DIR" angora-bin
+rm -rf "$CACHE_DIR/angora-bin"
 
-# libunwind — fuzzer-builder에 이미 설치되어 있으므로 /usr/local/lib에서 추출
-info "추출: libunwind"
-mkdir -p "$CACHE_DIR/libunwind"
-docker cp angora-extract:/usr/local/lib/libunwind.so          "$CACHE_DIR/libunwind/" 2>/dev/null || true
-docker cp angora-extract:/usr/local/lib/libunwind.so.8        "$CACHE_DIR/libunwind/" 2>/dev/null || true
-docker cp angora-extract:/usr/local/lib/libunwind.so.8.0.1    "$CACHE_DIR/libunwind/" 2>/dev/null || true
-docker cp angora-extract:/usr/local/lib/libunwind.a            "$CACHE_DIR/libunwind/" 2>/dev/null || true
-docker cp angora-extract:/usr/local/lib/libunwind-x86_64.so   "$CACHE_DIR/libunwind/" 2>/dev/null || true
-docker cp angora-extract:/usr/local/lib/libunwind-x86_64.so.8 "$CACHE_DIR/libunwind/" 2>/dev/null || true
-docker cp angora-extract:/usr/local/lib/libunwind-x86_64.a    "$CACHE_DIR/libunwind/" 2>/dev/null || true
-
-# 또는 libunwind-builder에서 직접 tar 추출 (더 깔끔)
+# libunwind-builder에서 직접 tar 추출
 info "추출: libunwind.tar.gz (libunwind-builder에서)"
 docker build \
     --target libunwind-builder \
@@ -142,9 +137,10 @@ info "=========================================="
 info "검증"
 info "=========================================="
 
+# [변경] Angora-1.2.2-Linux.sh → angora-bin.tar.gz 로 검증 항목 변경
 REQUIRED_FILES=(
     "LLVM-11.1.0-Linux.sh"
-    "Angora-1.2.2-Linux.sh"
+    "angora-bin.tar.gz"
     "libunwind.tar.gz"
     "libStandaloneFuzzTargetAngoraFast.a"
     "libStandaloneFuzzTargetAngoraTrack.a"

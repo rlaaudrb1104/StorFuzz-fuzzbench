@@ -1,0 +1,25 @@
+diff --git a/llvm_mode/compiler/angora_clang.c b/llvm_mode/compiler/angora_clang.c
+index 1c91afd..c70e56a 100644
+--- a/llvm_mode/compiler/angora_clang.c
++++ b/llvm_mode/compiler/angora_clang.c
+@@ -98,13 +98,13 @@ static u8 check_if_assembler(u32 argc, const char **argv) {
+ }
+
+ static void add_angora_pass() {
+-  if (clang_type != CLANG_DFSAN_TYPE) {
+-    cc_params[cc_par_cnt++] = "-Xclang";
+-    cc_params[cc_par_cnt++] = "-load";
+-    cc_params[cc_par_cnt++] = "-Xclang";
+-    cc_params[cc_par_cnt++] =
+-        alloc_printf("%s/pass/libUnfoldBranchPass.so", obj_path);
+-  }
++  // if (clang_type != CLANG_DFSAN_TYPE) {
++  //   cc_params[cc_par_cnt++] = "-Xclang";
++  //   cc_params[cc_par_cnt++] = "-load";
++  //   cc_params[cc_par_cnt++] = "-Xclang";
++  //   cc_params[cc_par_cnt++] =
++  //       alloc_printf("%s/pass/libUnfoldBranchPass.so", obj_path);
++  // }
+
+   cc_params[cc_par_cnt++] = "-Xclang";
+   cc_params[cc_par_cnt++] = "-load";

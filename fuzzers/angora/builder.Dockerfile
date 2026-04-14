@@ -23,6 +23,7 @@ COPY cached/LLVM-11.1.0-Linux.sh /tmp/
 RUN /tmp/LLVM-11.1.0-Linux.sh --skip-license --prefix=/usr/local && \
     mkdir -p $OUT/fuzzer_prefix/bin && \
     cp /usr/local/bin/llvm-xray $OUT/fuzzer_prefix/bin && \
+    cp /usr/local/bin/llvm-config $OUT/fuzzer_prefix/bin && \
     rm /tmp/LLVM-11.1.0-Linux.sh
 
 # ─── libunwind ───
@@ -35,11 +36,15 @@ RUN cd / && \
     rm /tmp/libunwind.tar.gz
 
 # ─── Angora fuzzer binary ───
-COPY cached/Angora-1.2.2-Linux.sh /tmp/
-RUN /tmp/Angora-1.2.2-Linux.sh --skip-license --prefix=/usr/local && \
+# [변경] cpack 설치 스크립트(Angora-1.2.2-Linux.sh) → build/build.sh 결과물 tar(angora-bin.tar.gz) 으로 변경
+#   tar 내부 구조: angora-bin/{fuzzer,angora-clang,angora-clang++,lib/,pass/,...}
+#   --strip-components=1 로 angora-bin/ 레이어를 벗겨 /usr/local/ 아래에 바로 설치
+#   fuzzer 바이너리는 /usr/local/fuzzer 에 위치 (bin/ 서브디렉토리 없음)
+COPY cached/angora-bin.tar.gz /tmp/
+RUN tar -xzf /tmp/angora-bin.tar.gz -C /usr/local --strip-components=1 && \
     mkdir -p $OUT/fuzzer_prefix/bin && \
-    cp /usr/local/bin/fuzzer $OUT/fuzzer_prefix/bin && \
-    rm /tmp/Angora-1.2.2-Linux.sh
+    cp /usr/local/fuzzer $OUT/fuzzer_prefix/bin && \
+    rm /tmp/angora-bin.tar.gz
 
 # ─── DFSan ABI lists ───
 COPY cached/extra_abilists /extra_abilists

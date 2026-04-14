@@ -15,6 +15,7 @@
 import os
 from pathlib import Path
 import copy
+import shutil
 import subprocess
 import json
 
@@ -42,8 +43,11 @@ def get_blacklist_args(benchmark_name):
 def build_angora_fast():
     build_env = copy.deepcopy(os.environ)
 
-    build_env["CC"] = "angora-clang"
-    build_env["CXX"] = "angora-clang++"
+    # [변경] angora-clang → /usr/local/angora-clang 전체 경로로 변경
+    # CC를 이름만으로 설정하면 configure 등에서 PATH 경유 호출 시
+    # argv[0]에 슬래시가 없어 find_obj()가 FATAL → configure가 "too harsh" 판단
+    build_env["CC"] = "/usr/local/angora-clang"
+    build_env["CXX"] = "/usr/local/angora-clang++"
     build_env["USE_FAST"] = "true"
     build_env["ANGORA_DISABLE_SANITIZERS"] = "true"
     build_env["FUZZER_LIB"] = str(
@@ -66,8 +70,11 @@ def build_angora_fast():
 def build_angora_track():
     build_env = copy.deepcopy(os.environ)
 
-    build_env["CC"] = "angora-clang"
-    build_env["CXX"] = "angora-clang++"
+    # [변경] angora-clang → /usr/local/angora-clang 전체 경로로 변경
+    # build_angora_fast()와 동일한 이유: find_obj()가 argv[0]의 슬래시 유무로
+    # libAngoraPass.so 경로를 추출하므로 슬래시 없는 이름으로 호출 시 FATAL
+    build_env["CC"] = "/usr/local/angora-clang"
+    build_env["CXX"] = "/usr/local/angora-clang++"
     build_env["USE_TRACK"] = "true"
 
     full_abilist_path = Path("/tmp/angora_track_abilist.txt")
@@ -141,7 +148,7 @@ def fuzz(input_corpus, output_corpus, target_binary):
         empty_path.touch()
 
     # Angora requires the output folder not to exist
-    Path(output_corpus).rmdir()
+    shutil.rmtree(output_corpus)
 
     out_path = Path(os.environ["OUT"])
     os.environ["PATH"] += f":{out_path / 'fuzzer_prefix/bin' }"
