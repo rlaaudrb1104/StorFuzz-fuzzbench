@@ -1,0 +1,27 @@
+From 25f4b1424fe6a889e84be22da719507a826ea89d Mon Sep 17 00:00:00 2001
+From: Elia Geretto <elia.f.geretto@gmail.com>
+Date: Tue, 6 Apr 2021 13:02:00 +0200
+Subject: [PATCH] Ignore STACKMAP instruction in x87 stackifier
+
+This is a temporary workaround and may cause miscompilations.
+
+---
+ llvm/lib/Target/X86/X86FloatingPoint.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/llvm/lib/Target/X86/X86FloatingPoint.cpp b/llvm/lib/Target/X86/X86FloatingPoint.cpp
+index b0f2f23f8548..b659d2e5a584 100644
+--- a/llvm/lib/Target/X86/X86FloatingPoint.cpp
++++ b/llvm/lib/Target/X86/X86FloatingPoint.cpp
+@@ -430,7 +430,7 @@ bool FPS::processBasicBlock(MachineFunction &MF, MachineBasicBlock &BB) {
+         X86::RFP80RegClass.contains(MI.getOperand(0).getReg()))
+       FPInstClass = X86II::SpecialFP;
+ 
+-    if (MI.isCall())
++    if (MI.isCall() && MI.getOpcode() != X86::STACKMAP)
+       FPInstClass = X86II::SpecialFP;
+ 
+     if (FPInstClass == X86II::NotFP)
+-- 
+2.26.2
+

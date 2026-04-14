@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Fix invalid ZExt attribute on void return in DFSanPass
+
+In DFSanPass.cc, CallInst::addAttribute(0, Attribute::ZExt) adds the
+ZExt attribute to the RETURN VALUE of the call (index 0 =
+AttributeList::ReturnIndex). Since dfsan_combine_and_ins returns void,
+adding ZExt to a void return is invalid IR.
+
+LLVM's IR verifier (release/11.x, post-11.1.0) added a check that
+rejects ZExt on void return types, causing a fatal error:
+
+  Wrong types for attribute: ...zeroext...
+    call zeroext void @dfsan_combine_and_ins(i32 %302)
+  fatal error: error in backend: Broken function found, compilation aborted!
+
+Fix: remove the two addAttribute(0, ZExt) calls on the void-returning
+dfsan_combine_and_ins CallInst.
+
+---
+ llvm_mode/pass/DFSanPass.cc | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/llvm_mode/pass/DFSanPass.cc b/llvm_mode/pass/DFSanPass.cc
+index 1111111..2222222 100644
+--- a/llvm_mode/pass/DFSanPass.cc
++++ b/llvm_mode/pass/DFSanPass.cc
+@@ -1246,9 +1246,7 @@ case Instruction::And:
+       if (Arg1->getType()->isIntegerTy() && Arg2->getType()->isIntegerTy()) {
+         IRBuilder<> IRB(Pos);
+         if (isa<ConstantInt>(Arg1) && V2 != DFS.ZeroShadow) { // Constant
+           CallInst *Call = IRB.CreateCall(DFS.DFSanCombineAndFn, {V2});
+-          Call->addAttribute(0, Attribute::ZExt);
+         } else if (isa<ConstantInt>(Arg2) && V1 != DFS.ZeroShadow) {
+           CallInst *Call = IRB.CreateCall(DFS.DFSanCombineAndFn, {V1});
+-          Call->addAttribute(0, Attribute::ZExt);
+         }
+       }
+     }

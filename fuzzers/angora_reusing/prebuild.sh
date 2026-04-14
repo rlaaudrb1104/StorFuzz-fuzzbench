@@ -72,7 +72,7 @@ info "=========================================="
 docker build \
     --no-cache \
     --target fuzzer-builder \
-    -t angora-prebuild:latest \
+    -t angora_reusing-prebuild:latest \
     -f "$FULL_DOCKERFILE" \
     "$SCRIPT_DIR"
 
@@ -87,17 +87,17 @@ rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 
 # 임시 컨테이너 생성
-docker create --name angora-extract angora-prebuild:latest /bin/true
+docker create --name angora_reusing-extract angora_reusing-prebuild:latest /bin/true
 
 # 핵심 바이너리
 info "추출: LLVM-11.1.0-Linux.sh"
-docker cp angora-extract:/llvm-project/LLVM-11.1.0-Linux.sh "$CACHE_DIR/"
+docker cp angora_reusing-extract:/llvm-project/LLVM-11.1.0-Linux.sh "$CACHE_DIR/"
 
 # [변경] Angora-1.2.2-Linux.sh(cpack 패키지) → angora-bin.tar.gz 으로 변경
 #   build/build.sh의 결과물은 /angora/bin/ 아래에 위치하며
 #   fuzzer 바이너리, angora-clang 래퍼, LLVM pass 라이브러리 등이 포함됨
 info "추출: angora-bin.tar.gz (/angora/bin/)"
-docker cp angora-extract:/angora/bin "$CACHE_DIR/angora-bin"
+docker cp angora_reusing-extract:/angora/bin "$CACHE_DIR/angora-bin"
 tar -czf "$CACHE_DIR/angora-bin.tar.gz" -C "$CACHE_DIR" angora-bin
 rm -rf "$CACHE_DIR/angora-bin"
 
@@ -114,22 +114,22 @@ docker rm angora-libunwind-extract > /dev/null
 
 # ABI lists
 info "추출: extra_abilists/"
-docker cp angora-extract:/extra_abilists "$CACHE_DIR/"
+docker cp angora_reusing-extract:/extra_abilists "$CACHE_DIR/"
 
 # Standalone fuzz target libraries
 info "추출: libStandaloneFuzzTarget*.a"
-docker cp angora-extract:/llvm-project/libStandaloneFuzzTargetAngoraFast.a  "$CACHE_DIR/"
-docker cp angora-extract:/llvm-project/libStandaloneFuzzTargetAngoraTrack.a "$CACHE_DIR/"
+docker cp angora_reusing-extract:/llvm-project/libStandaloneFuzzTargetAngoraFast.a  "$CACHE_DIR/"
+docker cp angora_reusing-extract:/llvm-project/libStandaloneFuzzTargetAngoraTrack.a "$CACHE_DIR/"
 
 # libcxx prefixes
 info "추출: plain-prefix/ (angora fast libcxx)"
-docker cp angora-extract:/llvm-project/plain-prefix "$CACHE_DIR/"
+docker cp angora_reusing-extract:/llvm-project/plain-prefix "$CACHE_DIR/"
 
 info "추출: track-prefix/ (angora track libcxx)"
-docker cp angora-extract:/llvm-project/track-prefix "$CACHE_DIR/"
+docker cp angora_reusing-extract:/llvm-project/track-prefix "$CACHE_DIR/"
 
 # ─── 정리 ───
-docker rm angora-extract > /dev/null
+docker rm angora_reusing-extract > /dev/null
 info "임시 컨테이너 제거 완료"
 
 # ─── 검증 ───

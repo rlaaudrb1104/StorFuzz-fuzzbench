@@ -1,0 +1,59 @@
+From f2c57fe2d9dc452cd24bd9ebaa85a342d2540f00 Mon Sep 17 00:00:00 2001
+From: Elia Geretto <elia.f.geretto@gmail.com>
+Date: Wed, 7 Apr 2021 10:43:16 +0200
+Subject: [PATCH] [CMake] Add Custom sanitizer to build system
+
+This patch changes the build system to allow passing custom sanitizer
+flags when building LLVM. It is needed to allow building libcxx and
+libcxxabi with the Angora Track instrumentation.
+
+This patch is correct but is unlikely to be accepted upstream.
+
+---
+ libcxx/CMakeLists.txt                      | 2 ++
+ llvm/CMakeLists.txt                        | 2 ++
+ llvm/cmake/modules/HandleLLVMOptions.cmake | 2 ++
+ 3 files changed, 6 insertions(+)
+
+diff --git a/libcxx/CMakeLists.txt b/libcxx/CMakeLists.txt
+index 910d04b54b6d..183cc6b2069b 100644
+--- a/libcxx/CMakeLists.txt
++++ b/libcxx/CMakeLists.txt
+@@ -708,6 +708,8 @@ function(get_sanitizer_flags OUT_VAR  USE_SANITIZER)
+       append_flags(SANITIZER_FLAGS -fsanitize=thread)
+     elseif (USE_SANITIZER STREQUAL "DataFlow")
+       append_flags(SANITIZER_FLAGS -fsanitize=dataflow)
++    elseif (USE_SANITIZER STREQUAL "Custom")
++      append_flags(SANITIZER_FLAGS "${LLVM_CUSTOM_SANITIZER_FLAGS}")
+     else()
+       message(WARNING "Unsupported value of LLVM_USE_SANITIZER: ${USE_SANITIZER}")
+     endif()
+diff --git a/llvm/CMakeLists.txt b/llvm/CMakeLists.txt
+index 247ad36d3845..e438bfdec3de 100644
+--- a/llvm/CMakeLists.txt
++++ b/llvm/CMakeLists.txt
+@@ -490,6 +490,8 @@ endif( LLVM_USE_PERF )
+ 
+ set(LLVM_USE_SANITIZER "" CACHE STRING
+   "Define the sanitizer used to build binaries and tests.")
++set(LLVM_CUSTOM_SANITIZER_FLAGS "" CACHE STRING
++  "Compiler flags used when LLVM_USE_SANITIZER is set to Custom")
+ option(LLVM_OPTIMIZE_SANITIZED_BUILDS "Pass -O1 on debug sanitizer builds" ON)
+ set(LLVM_LIB_FUZZING_ENGINE "" CACHE PATH
+   "Path to fuzzing library for linking with fuzz targets")
+diff --git a/llvm/cmake/modules/HandleLLVMOptions.cmake b/llvm/cmake/modules/HandleLLVMOptions.cmake
+index 5ef22eb493ba..81211addc4b5 100644
+--- a/llvm/cmake/modules/HandleLLVMOptions.cmake
++++ b/llvm/cmake/modules/HandleLLVMOptions.cmake
+@@ -755,6 +755,8 @@ if(LLVM_USE_SANITIZER)
+     elseif (LLVM_USE_SANITIZER STREQUAL "Leaks")
+       append_common_sanitizer_flags()
+       append("-fsanitize=leak" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
++    elseif (LLVM_USE_SANITIZER STREQUAL "Custom")
++      append("${LLVM_CUSTOM_SANITIZER_FLAGS}" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+     else()
+       message(FATAL_ERROR "Unsupported value of LLVM_USE_SANITIZER: ${LLVM_USE_SANITIZER}")
+     endif()
+-- 
+2.30.2
+
