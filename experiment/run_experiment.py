@@ -289,14 +289,14 @@ def check_no_uncommitted_changes():
 
 def get_git_hash(allow_uncommitted_changes):
     """Return the git hash for the last commit in the local repo."""
-    try:
-        output = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
-                                         cwd=utils.ROOT_DIR)
-        return output.strip().decode('utf-8')
-    except subprocess.CalledProcessError as error:
-        if not allow_uncommitted_changes:
-            raise error
-        return ''
+    # try:
+    #     output = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
+    #                                      cwd=utils.ROOT_DIR)
+    #     return output.strip().decode('utf-8')
+    # except subprocess.CalledProcessError as error:
+    #     if not allow_uncommitted_changes:
+    #         raise error
+    #     return ''
 
 
 def _filter_incompatible_benchmarks(config: dict,
