@@ -1,0 +1,28 @@
+commit 2627f99613740b8f8a85e150dc0e4c4b6fa6e13f
+Author: Elia Geretto <EliaGeretto>
+Date:   Thu Apr 22 21:05:13 2021 +0000
+
+    [dfsan] Fix Len argument type in call to __dfsan_mem_transfer_callback
+    
+    This patch is supposed to solve: https://bugs.llvm.org/show_bug.cgi?id=50075
+    
+    The function `__dfsan_mem_transfer_callback` takes a `Len` argument of type `i64`; however, when processing a `MemTransferInst` such as `llvm.memcpy.p0i8.p0i8.i32`, the `len` argument has type `i32`. In order to make the type of `len` compatible with the one of the callback argument, this change zero-extends it when necessary.
+    
+    Reviewed By: stephan.yichao.zhao, gbalats
+    
+    Differential Revision: https://reviews.llvm.org/D101048
+
+diff --git a/llvm/lib/Transforms/Instrumentation/DataFlowSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/DataFlowSanitizer.cpp
+index 19dd41904779..015639dcceb6 100644
+--- a/llvm/lib/Transforms/Instrumentation/DataFlowSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/DataFlowSanitizer.cpp
+@@ -2915,7 +2915,8 @@ void DFSanVisitor::visitMemTransferInst(MemTransferInst &I) {
+   }
+   if (ClEventCallbacks) {
+     IRB.CreateCall(DFSF.DFS.DFSanMemTransferCallbackFn,
+-                   {RawDestShadow, I.getLength()});
++                   {RawDestShadow,
++                    IRB.CreateZExtOrTrunc(I.getLength(), DFSF.DFS.IntptrTy)});
+   }
+ }
+ 

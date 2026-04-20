@@ -1,0 +1,35 @@
+From b1b4baab3b173d098ca54c49e430602e80425c73 Mon Sep 17 00:00:00 2001
+From: Elia Geretto <elia.f.geretto@gmail.com>
+Date: Mon, 10 May 2021 12:29:35 +0200
+Subject: [PATCH] Disable UnfoldBranchPass
+
+---
+ llvm_mode/compiler/angora_clang.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/llvm_mode/compiler/angora_clang.c b/llvm_mode/compiler/angora_clang.c
+index 28f69ea..4f484c6 100644
+--- a/llvm_mode/compiler/angora_clang.c
++++ b/llvm_mode/compiler/angora_clang.c
+@@ -98,12 +98,12 @@ static u8 check_if_assembler(u32 argc, char **argv) {
+ }
+ 
+ static void add_angora_pass(size_t* cc_par_cnt, char* cc_params[*cc_par_cnt], struct config* config) {
+-  if (config->clang_type != CLANG_DFSAN_TYPE) {
+-    cc_params[(*cc_par_cnt)++] = "-Xclang";
+-    cc_params[(*cc_par_cnt)++] = "-load";
+-    cc_params[(*cc_par_cnt)++] = "-Xclang";
+-    cc_params[(*cc_par_cnt)++] = UNFOLD_BRANCH_PASS_PATH;
+-  }
++  // if (config->clang_type != CLANG_DFSAN_TYPE) {
++  //   cc_params[(*cc_par_cnt)++] = "-Xclang";
++  //   cc_params[(*cc_par_cnt)++] = "-load";
++  //   cc_params[(*cc_par_cnt)++] = "-Xclang";
++  //   cc_params[(*cc_par_cnt)++] = UNFOLD_BRANCH_PASS_PATH;
++  // }
+ 
+   cc_params[(*cc_par_cnt)++] = "-Xclang";
+   cc_params[(*cc_par_cnt)++] = "-load";
+-- 
+2.31.1
+

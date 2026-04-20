@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash prebuild.sh 2>&1)"
+    ]
+  }
+}
