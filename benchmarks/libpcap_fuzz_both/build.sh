@@ -17,7 +17,7 @@
 
 cd libpcap
 # build project
-mkdir build
+mkdir -p build
 cd build
 cmake -DDISABLE_DBUS=1 ..
 make
@@ -34,7 +34,7 @@ cd $SRC/tcpdump/
 zip -r fuzz_pcap_seed_corpus.zip tests/
 cp fuzz_pcap_seed_corpus.zip $OUT/
 cd $SRC/libpcap/testprogs/BPF
-mkdir corpus
+mkdir -p corpus
 ls *.txt | while read i; do tail -1 $i > corpus/$i; done
 zip -r fuzz_filter_seed_corpus.zip corpus/
 cp fuzz_filter_seed_corpus.zip $OUT/

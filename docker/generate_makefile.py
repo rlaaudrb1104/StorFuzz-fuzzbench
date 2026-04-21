@@ -159,7 +159,7 @@ def generate_makefile():
     # BuildKit(1)은 docker buildx 플러그인이 필요하나 컨테이너 내부의
     # docker.io 기본 설치에는 buildx가 없어 빌드 실패함
     # 기능상 차이 없으므로 기본 엔진(0)으로 변경
-    makefile = 'export DOCKER_BUILDKIT := 0\n\n'
+    makefile = 'export DOCKER_BUILDKIT := 1\n\n'
 
     # Print oss-fuzz benchmarks property variables.
     makefile += _get_benchmark_fuzz_target(benchmarks)

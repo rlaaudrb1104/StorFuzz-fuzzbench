@@ -47,7 +47,7 @@ ninja -v -j$(nproc) -C $build test/fuzzing/hb-shape-fuzzer
 mv $build/test/fuzzing/hb-shape-fuzzer $OUT/
 
 # Archive and copy to $OUT seed corpus if the build succeeded.
-mkdir all-fonts
+mkdir -p all-fonts
 for d in \
     test/shape/data/in-house/fonts \
     test/shape/data/aots/fonts \
@@ -59,5 +59,5 @@ for d in \
     cp $d/* all-fonts/
 done
 
-mkdir $OUT/seeds
+mkdir -p $OUT/seeds
 cp all-fonts/* $OUT/seeds/

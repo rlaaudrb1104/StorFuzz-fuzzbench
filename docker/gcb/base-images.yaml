@@ -24,8 +24,6 @@ steps:
 - args:
   - pull
   - ubuntu:focal
-  env:
-    - DOCKER_BUILDKIT=1
   id: pull-ubuntu-focal
   name: docker:19.03.12
 - args:
@@ -43,8 +41,6 @@ steps:
   - --file
   - docker/base-image/Dockerfile
   - .
-  env:
-    - DOCKER_BUILDKIT=1
   id: base-image
   name: docker:19.03.12
 - args:

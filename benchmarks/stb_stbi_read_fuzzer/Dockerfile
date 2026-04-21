@@ -24,7 +24,7 @@ RUN apt-get update && \
 RUN git clone \
         https://github.com/nothings/stb.git
 
-RUN mkdir $SRC/stbi # CIFuzz workaround
+RUN mkdir -p $SRC/stbi # CIFuzz workaround
 
 RUN wget -O \
     $SRC/stbi/gif.tar.gz https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/imagetestsuite/imagetestsuite-gif-1.00.tar.gz

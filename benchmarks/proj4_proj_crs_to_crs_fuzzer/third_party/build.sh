@@ -50,7 +50,7 @@ make -j$(nproc)
 make install
 cd ..
 
-mkdir build
+mkdir -p build
 cd build
 cmake .. -DBUILD_SHARED_LIBS:BOOL=OFF \
         -DCURL_INCLUDE_DIR:PATH="$SRC/install/include" \
