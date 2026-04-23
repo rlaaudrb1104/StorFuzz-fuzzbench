@@ -17,6 +17,9 @@ from pathlib import Path
 import copy
 import subprocess
 import json
+import shutil
+import threading
+import time
 
 from fuzzers import utils
 
@@ -306,7 +309,7 @@ def build_angora_track():
     build_env["USE_TRACK"] = "true"
 
     benchmark = os.environ["BENCHMARK"]
-    full_abilist_path = Path("/tmp/angora_track_abilist.txt")
+    full_abilist_path = Path("/tmp/snappy_angora_track_abilist.txt")
 
     with open(full_abilist_path, "w") as full_abilist_file:
         # 기존: 외부 abilist 파일 병합
@@ -386,7 +389,7 @@ def fuzz(input_corpus, output_corpus, target_binary):
         empty_path.touch()
 
     # Angora requires the output folder not to exist
-    Path(output_corpus).rmdir()
+    shutil.rmtree(output_corpus)
 
     out_path = Path(os.environ["OUT"])
     os.environ["PATH"] += f":{out_path / 'fuzzer_prefix/bin' }"
@@ -396,21 +399,30 @@ def fuzz(input_corpus, output_corpus, target_binary):
     os.environ["RUST_BACKTRACE"] = "1"
     os.environ["RUST_LOG"] = "warn"
 
-    subprocess.run(
-        [
-            "fuzzer",
-            "--memory_limit=2048",
-            f"--input={input_corpus}",
-            f"--output={output_corpus}",
-            "--mode=llvm",
-            f"--track={angora_track_path}",
-            "--",
-            str(angora_fast_path),
-            "@@",
-        ],
-        check=True,
+    stop_event = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_dryrun,
+        args=(input_corpus, stop_event),
+        daemon=True
     )
+    watcher.start()
 
+    try:
+        subprocess.run(
+            [
+                "fuzzer",
+                f"--input={input_corpus}",
+                f"--output={output_corpus}",
+                "--mode=llvm",
+                f"--track={angora_track_path}",
+                "--",
+                str(angora_fast_path),
+                "@@",
+            ],
+            check=True,
+        )
+    finally:
+        stop_event.set() 
 
 def get_stats(output_corpus, fuzzer_log):  # pylint: disable=unused-argument
     """Gets fuzzer stats for Angora."""
