@@ -18,8 +18,6 @@ import copy
 import subprocess
 import json
 import shutil
-import threading
-import time
 
 from fuzzers import utils
 
@@ -399,30 +397,20 @@ def fuzz(input_corpus, output_corpus, target_binary):
     os.environ["RUST_BACKTRACE"] = "1"
     os.environ["RUST_LOG"] = "warn"
 
-    stop_event = threading.Event()
-    watcher = threading.Thread(
-        target=_watch_dryrun,
-        args=(input_corpus, stop_event),
-        daemon=True
+    subprocess.run(
+        [
+            "fuzzer",
+            f"--input={input_corpus}",
+            f"--output={output_corpus}",
+            "--mode=llvm",
+            f"--track={angora_track_path}",
+            "--",
+            str(angora_fast_path),
+            "@@",
+        ],
+        check=True,
     )
-    watcher.start()
 
-    try:
-        subprocess.run(
-            [
-                "fuzzer",
-                f"--input={input_corpus}",
-                f"--output={output_corpus}",
-                "--mode=llvm",
-                f"--track={angora_track_path}",
-                "--",
-                str(angora_fast_path),
-                "@@",
-            ],
-            check=True,
-        )
-    finally:
-        stop_event.set() 
 
 def get_stats(output_corpus, fuzzer_log):  # pylint: disable=unused-argument
     """Gets fuzzer stats for Angora."""
