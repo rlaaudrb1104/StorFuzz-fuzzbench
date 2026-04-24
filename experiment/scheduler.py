@@ -584,11 +584,17 @@ def schedule_loop(experiment_config: dict):
     if runners_cpus is not None:
         if local_experiment:
             runner_num_cpu_cores = experiment_config['runner_num_cpu_cores']
+            runners_cpus_offset = experiment_config.get('runners_cpus_offset',
+                                                        0)
             processes = runners_cpus // runner_num_cpu_cores
-            logger.info('Scheduling runners from core 0 to %d.',
-                        runner_num_cpu_cores * processes - 1)
+            logger.info('Scheduling runners from core %d to %d.',
+                        runners_cpus_offset,
+                        runners_cpus_offset + runner_num_cpu_cores * processes -
+                        1)
             core_allocation = {}
-            for cpu in range(0, runner_num_cpu_cores * processes,
+            for cpu in range(runners_cpus_offset,
+                             runners_cpus_offset +
+                             runner_num_cpu_cores * processes,
                              runner_num_cpu_cores):
                 core_allocation[
                     f'{cpu}-{cpu + runner_num_cpu_cores - 1}'] = None

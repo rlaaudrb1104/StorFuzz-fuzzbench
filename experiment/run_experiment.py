@@ -324,6 +324,7 @@ def start_experiment(  # pylint: disable=too-many-arguments
         concurrent_builds: Optional[int] = DEFAULT_CONCURRENT_BUILDS,
         measurers_cpus: Optional[int] = None,
         runners_cpus: Optional[int] = None,
+        runners_cpus_offset: Optional[int] = None,
         region_coverage: bool = False,
         custom_seed_corpus_dir: Optional[str] = None):
     """Start a fuzzer benchmarking experiment."""
@@ -345,6 +346,7 @@ def start_experiment(  # pylint: disable=too-many-arguments
     config['concurrent_builds'] = concurrent_builds
     config['measurers_cpus'] = measurers_cpus
     config['runners_cpus'] = runners_cpus
+    config['runners_cpus_offset'] = runners_cpus_offset or 0
     config['runner_machine_type'] = config.get('runner_machine_type',
                                                'n1-standard-1')
     config['runner_num_cpu_cores'] = config.get('runner_num_cpu_cores', 1)
@@ -677,6 +679,12 @@ def run_experiment_main(args=None):
                         help='Cpus available to the runners.',
                         type=int,
                         required=False)
+    parser.add_argument('-rco',
+                        '--runners-cpus-offset',
+                        help='Starting CPU index for runner cpuset pinning.',
+                        type=int,
+                        default=0,
+                        required=False)
     parser.add_argument('-cs',
                         '--custom-seed-corpus-dir',
                         help='Path to the custom seed corpus',
@@ -744,11 +752,17 @@ def run_experiment_main(args=None):
                      f'{measurers_cpus}) you need to specify the runners cpus '
                      'argument too.')
 
-    if (runners_cpus if runners_cpus else 0) + (measurers_cpus if measurers_cpus
-                                                else 0) > os.cpu_count():
-        parser.error(f'The sum of runners ({runners_cpus}) and measurers cpus '
-                     f'({measurers_cpus}) is greater than the available cpu '
-                     f'cores (os.cpu_count()).')
+    runners_cpus_offset = args.runners_cpus_offset or 0
+    if runners_cpus_offset < 0:
+        parser.error('The runners cpus offset argument must be a non-negative '
+                     f'number, received {runners_cpus_offset}.')
+
+    if (runners_cpus_offset + (runners_cpus if runners_cpus else 0) +
+            (measurers_cpus if measurers_cpus else 0)) > os.cpu_count():
+        parser.error(
+            f'The sum of runners offset ({runners_cpus_offset}), runners '
+            f'({runners_cpus}) and measurers cpus ({measurers_cpus}) is '
+            f'greater than the available cpu cores (os.cpu_count()).')
 
     if args.custom_seed_corpus_dir:
         if args.no_seeds:
@@ -778,6 +792,7 @@ def run_experiment_main(args=None):
                      concurrent_builds=concurrent_builds,
                      measurers_cpus=measurers_cpus,
                      runners_cpus=runners_cpus,
+                     runners_cpus_offset=runners_cpus_offset,
                      region_coverage=args.region_coverage,
                      custom_seed_corpus_dir=args.custom_seed_corpus_dir)
     return 0
