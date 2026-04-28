@@ -120,6 +120,43 @@ def delete_instances(instances, experiment_config):
                                    experiment_config['cloud_compute_zone'])
 
 
+def end_finished_trials(experiment_config: dict, core_allocation: dict):
+    """For local experiments, check runner_done sentinel files and immediately
+    mark any completed trials as ended without waiting for expiry timeout."""
+    if not experiment_utils.is_local_experiment():
+        return
+
+    experiment = experiment_config['experiment']
+    filestore = experiment_config['experiment_filestore']
+    dryrun_dir = os.path.join(filestore, experiment, 'dryrun')
+
+    running_trials = list(get_running_trials(experiment))
+    if not running_trials:
+        return
+
+    current_dt = datetime_now()
+    finished = []
+    finished_ids = []
+    for trial in running_trials:
+        sentinel = os.path.join(dryrun_dir, f'runner_done_{trial.id}')
+        if os.path.exists(sentinel):
+            trial.time_ended = current_dt
+            finished.append(trial)
+            finished_ids.append(trial.id)
+
+    if not finished:
+        return
+
+    if core_allocation is not None:
+        for cpuset, trial_id in core_allocation.items():
+            if trial_id in finished_ids:
+                core_allocation[cpuset] = None
+
+    db_utils.bulk_save(finished)
+    logger.info('Marked %d finished trial(s) as ended: %s', len(finished_ids),
+                finished_ids)
+
+
 def end_expired_trials(experiment_config: dict, core_allocation: dict):
     """Get all expired trials, end them and return them."""
     trials_past_expiry = get_expired_trials(experiment_config['experiment'],
@@ -557,6 +594,9 @@ def schedule(experiment_config: dict, pool, core_allocation=None):
     those that are possible."""
     logger.info('Finding trials to schedule.')
 
+    # For local experiments: mark trials done immediately via runner sentinel.
+    end_finished_trials(experiment_config, core_allocation)
+
     # End expired trials
     end_expired_trials(experiment_config, core_allocation)
 
@@ -632,7 +672,10 @@ def schedule_loop(experiment_config: dict):
             # - We have not been able to start trials and still have some
             #   remaining. This can happen when we run out of instance quota.
             # In these cases, sleep before retrying again.
-            time.sleep(FAIL_WAIT_SECONDS)
+            # For local experiments, use a shorter interval so runner_done
+            # sentinels are detected promptly.
+            wait = 60 if local_experiment else FAIL_WAIT_SECONDS
+            time.sleep(wait)
 
     logger.info('Finished scheduling.')
 
@@ -785,6 +828,10 @@ def render_startup_script_template(  # pylint: disable=too-many-arguments
         'private': experiment_config['private'],
         'cpuset': cpuset,
         'custom_seed_corpus_dir': experiment_config['custom_seed_corpus_dir'],
+        'max_cycles': experiment_config.get('max_cycles'),
+        'only_dryrun': experiment_config.get('only_dryrun', False),
+        'analysis_mode': experiment_config.get('analysis_mode', False),
+        'deterministic_seed': experiment_config.get('deterministic_seed', False),
     }
 
     if not local_experiment:

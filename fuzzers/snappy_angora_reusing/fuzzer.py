@@ -18,8 +18,43 @@ import copy
 import subprocess
 import json
 import shutil
+import threading
 
 from fuzzers import utils
+
+
+def _get_dry_run_paths():
+    """runner.py와 동일한 규칙으로 dry run 마커/sentinel 경로를 반환한다.
+
+    형식: {EXPERIMENT_FILESTORE}/{EXPERIMENT}/dryrun/dry_run_{opt_in|done}_{TRIAL_ID}
+    """
+    filestore = os.environ.get('EXPERIMENT_FILESTORE', '/tmp')
+    experiment = os.environ.get('EXPERIMENT', 'unknown')
+    trial_id = os.environ.get('TRIAL_ID', 'unknown')
+    dryrun_dir = os.path.join(filestore, experiment, 'dryrun')
+    os.makedirs(dryrun_dir, exist_ok=True)
+    opt_in = os.path.join(dryrun_dir, f'dry_run_opt_in_{trial_id}')
+    sentinel = os.path.join(dryrun_dir, f'dry_run_done_{trial_id}')
+    return opt_in, sentinel
+
+
+def _watch_angora_dry_run(output_corpus, sentinel_path, stop_event):
+    """Angora의 dry run 완료를 감지하는 백그라운드 스레드.
+
+    Angora는 dry run 완료 후 output_corpus/queue/signal/dryrun_finish 를 생성한다.
+    파일이 감지되면 sentinel을 생성해 runner.py에 알린다.
+    """
+    dryrun_finish = Path(output_corpus) / 'queue' / 'signal' / 'dryrun_finish'
+    print(f'[DRY_RUN] Angora dry run watcher started. '
+          f'Watching: {dryrun_finish}')
+    while not stop_event.is_set():
+        if dryrun_finish.exists():
+            Path(sentinel_path).touch()
+            print(f'[DRY_RUN] Angora dry run complete (dryrun_finish found). '
+                  f'Sentinel created: {sentinel_path}')
+            return
+        stop_event.wait(2)
+    print('[DRY_RUN] Angora dry run watcher stopped (fuzzer exited).')
 
 EXTRA_ABILISTS_PATH = Path("/extra_abilists")
 LLVM_PROJECT_PATH = Path("/llvm-project")
@@ -290,6 +325,7 @@ def build_angora_fast():
     # to the script from AFL++
     src = Path(build_env["SRC"])
     work = Path(build_env["WORK"])
+    build_env["ANGORA_PASS_LOG_DIR"] = str(Path(build_env["OUT"]))
     with utils.restore_directory(src), utils.restore_directory(work):
         utils.build_benchmark(build_env)
 
@@ -305,7 +341,6 @@ def build_angora_track():
     build_env["CC"] = "angora-clang"
     build_env["CXX"] = "angora-clang++"
     build_env["USE_TRACK"] = "true"
-
     benchmark = os.environ["BENCHMARK"]
     full_abilist_path = Path("/tmp/snappy_angora_reusing_track_abilist.txt")
 
@@ -333,6 +368,7 @@ def build_angora_track():
     # to the script from AFL++
     src = Path(build_env["SRC"])
     work = Path(build_env["WORK"])
+    build_env["ANGORA_PASS_LOG_DIR"] = str(Path(build_env["OUT"]))
     with utils.restore_directory(src), utils.restore_directory(work):
         utils.build_benchmark(build_env)
 
@@ -390,6 +426,18 @@ def fuzz(input_corpus, output_corpus, target_binary):
     shutil.rmtree(output_corpus)
 
     out_path = Path(os.environ["OUT"])
+
+    # logs
+    filestore = os.environ.get('EXPERIMENT_FILESTORE', '/tmp')
+    experiment = os.environ.get('EXPERIMENT', 'unknown')
+    fuzzer_name = os.environ.get('FUZZER', 'unknown')
+    logs_dir = Path(filestore) / experiment / 'logs'
+
+    os.makedirs(logs_dir, exist_ok=True)
+
+    shutil.copy(str(out_path / "cmpid_log_fast.json"), str(logs_dir / f"{fuzz_target_name}_{fuzzer_name}_cmpid_log_fast.json"))
+    shutil.copy(str(out_path / "cmpid_log_track.json"), str(logs_dir / f"{fuzz_target_name}_{fuzzer_name}_cmpid_log_track.json"))
+
     os.environ["PATH"] += f":{out_path / 'fuzzer_prefix/bin' }"
     os.environ["LD_LIBRARY_PATH"] = str(out_path / "fuzzer_prefix/lib")
     os.environ["ANGORA_DISABLE_CPU_BINDING"] = "true"
@@ -397,20 +445,53 @@ def fuzz(input_corpus, output_corpus, target_binary):
     os.environ["RUST_BACKTRACE"] = "1"
     os.environ["RUST_LOG"] = "warn"
 
-    subprocess.run(
-        [
-            "fuzzer",
-            # "--memory_limit=2048",
-            f"--input={input_corpus}",
-            f"--output={output_corpus}",
-            "--mode=llvm",
-            f"--track={angora_track_path}",
-            "--",
-            str(angora_fast_path),
-            "@@",
-        ],
-        check=True,
+    # config.yaml 옵션 읽기
+    only_dryrun = os.environ.get('ONLY_DRYRUN', 'false').lower() == 'true'
+    analysis_mode = os.environ.get('ANALYSIS_MODE', 'false').lower() == 'true'
+    deterministic_seed = os.environ.get('DETERMINISTIC_SEED', 'false').lower() == 'true'
+    print(f"[DEBUG] Config: ONLY_DRYRUN={only_dryrun}, ANALYSIS_MODE={analysis_mode}, DETERMINISTIC_SEED={deterministic_seed}")
+
+    # Dry run opt-in: runner.py에 dry run이 있음을 알림
+    dry_run_opt_in_path, dry_run_sentinel_path = _get_dry_run_paths()
+    Path(dry_run_opt_in_path).touch()
+    print(f'[DRY_RUN] Angora dry run opt-in marker created: {dry_run_opt_in_path}')
+
+    # Dry run 완료 감지 watcher 시작 (dryrun_finish 파일 감시)
+    watcher_stop = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_angora_dry_run,
+        args=(str(output_corpus), dry_run_sentinel_path, watcher_stop),
+        daemon=True,
     )
+    watcher.start()
+
+    fuzzer_cmd = [
+        "fuzzer",
+        f"--input={input_corpus}",
+        f"--output={output_corpus}",
+        "--mode=llvm",
+        f"--track={angora_track_path}",
+    ]
+    if deterministic_seed:
+        fuzzer_cmd += ["--deterministic-seed", "0"]
+    if only_dryrun:
+        fuzzer_cmd.append("--only-dryrun")
+    if analysis_mode:
+        fuzzer_cmd.append("--analysis-mode")
+    fuzzer_cmd += ["--", str(angora_fast_path), "@@"]
+
+    angora_proc = subprocess.Popen(fuzzer_cmd)
+    try:
+        angora_proc.wait()
+    except KeyboardInterrupt:
+        # SIGINT가 프로세스 그룹 전체로 전달되어 Python wrapper와 Angora가
+        # 동시에 SIGINT를 받는다. Python wrapper가 먼저 종료되면 runner.py의
+        # proc.wait()이 반환되어 최종 do_sync()가 너무 일찍 실행된다.
+        # Angora가 SIGINT shutdown 산출물을 모두 기록한 뒤 종료할 때까지 대기한다.
+        angora_proc.wait()
+    finally:
+        watcher_stop.set()
+        watcher.join(timeout=5)
 
 
 def get_stats(output_corpus, fuzzer_log):  # pylint: disable=unused-argument

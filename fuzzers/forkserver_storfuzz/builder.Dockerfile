@@ -57,12 +57,6 @@ RUN cd /StorFuzz && git apply /storfuzz.patch
 #     clang -c stub_rt.c && \
 #     ar r /libafl-stats/stub_rt.a stub_rt.o
 
-# Patch Cargo.toml: add track_hit_feedbacks, sancov_cmplog, mimalloc
-RUN cd /StorFuzz/fuzzers/forkserver_libafl_cc && \
-    sed -i 's|libafl = { path = "../../libafl/" }|libafl = { path = "../../libafl/", features = ["track_hit_feedbacks"] }|' Cargo.toml && \
-    sed -i 's|features = \["sancov_pcguard_hitcounts", "libfuzzer", "pointer_maps"\]|features = ["sancov_pcguard_hitcounts", "libfuzzer", "pointer_maps", "sancov_cmplog"]|' Cargo.toml && \
-    sed -i 's|env_logger = "0\.11"|mimalloc = { version = "*", default-features = false }\nstorfuzz_constants = {path = "../storfuzz_constants/"}\nenv_logger = "*"\nlog = "*"|' Cargo.toml
-
 RUN cd /StorFuzz/fuzzers/forkserver_libafl_cc && \
     unset CFLAGS CXXFLAGS && \
     export LIBAFL_EDGES_MAP_SIZE_MAX=4194304 && \

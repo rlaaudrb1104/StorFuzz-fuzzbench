@@ -66,6 +66,10 @@ RUN cd /libafl-stats && git apply /forkserver_libafl_baseline.patch
 COPY forkserver_toml_monitor.patch /
 RUN cd /libafl-stats && git apply /forkserver_toml_monitor.patch
 
+# Patch 4: Add forkserver_libafl_dryrun.patch
+COPY forkserver_libafl_dryrun.patch /
+RUN cd /libafl-stats && git apply /forkserver_libafl_dryrun.patch
+
 # Patch Cargo.toml: add track_hit_feedbacks, sancov_cmplog, mimalloc
 RUN cd /libafl-stats/fuzzers/forkserver_libafl_cc && \
     sed -i 's|libafl = { path = "../../libafl/" }|libafl = { path = "../../libafl/", features = ["track_hit_feedbacks"] }|' Cargo.toml && \

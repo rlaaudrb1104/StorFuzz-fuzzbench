@@ -1,0 +1,15 @@
+diff --git a/fuzzers/forkserver_libafl_cc/src/main.rs b/fuzzers/forkserver_libafl_cc/src/main.rs
+index 5b131120..0c53ed8a 100644
+--- a/fuzzers/forkserver_libafl_cc/src/main.rs
++++ b/fuzzers/forkserver_libafl_cc/src/main.rs
+@@ -201,6 +201,10 @@ pub fn main() {
+             });
+         println!("We imported {} inputs from disk.", state.corpus().count());
+     }
++    
++    let signal_dir = queue_dir.join("signal");
++    std::fs::create_dir_all(&signal_dir).unwrap();
++    std::fs::File::create(signal_dir.join("dryrun_finish")).unwrap();
+ 
+     state.add_metadata(tokens);
+ 

@@ -1,3 +1,25 @@
+diff --git a/fuzzers/forkserver_libafl_cc/Cargo.toml b/fuzzers/forkserver_libafl_cc/Cargo.toml
+index 9c51faee..ad939763 100644
+--- a/fuzzers/forkserver_libafl_cc/Cargo.toml
++++ b/fuzzers/forkserver_libafl_cc/Cargo.toml
+@@ -23,11 +23,14 @@ which = { version = "6.0" }
+ [dependencies]
+ clap = { version = "4.0", features = ["derive"] }
+ nix = { version = "0.29", features = ["signal"] }
+-libafl = { path = "../../libafl/" }
++libafl = { path = "../../libafl/", features = ["track_hit_feedbacks"] }
+ libafl_bolts = { path = "../../libafl_bolts/" }
+ libafl_cc = { path = "../../libafl_cc/" }
+-libafl_targets = { path = "../../libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer", "pointer_maps"] }
+-env_logger = "0.11"
++libafl_targets = { path = "../../libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer", "pointer_maps", "sancov_cmplog"] }
++mimalloc = { version = "*", default-features = false }
++storfuzz_constants = {path = "../storfuzz_constants/"}
++env_logger = "*"
++log = "*"
+ 
+ [lib]
+ name = "libforkserver_libafl_cc"
 diff --git a/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs b/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs
 index 21ab9936..defb8539 100644
 --- a/fuzzers/forkserver_libafl_cc/src/bin/libafl_cc.rs
@@ -62,7 +84,7 @@ index 2646c42b..7a9b4761 100644
      start_forkserver();
  }
 diff --git a/fuzzers/forkserver_libafl_cc/src/main.rs b/fuzzers/forkserver_libafl_cc/src/main.rs
-index 5b131120..b225ddb5 100644
+index 5b131120..568e31c0 100644
 --- a/fuzzers/forkserver_libafl_cc/src/main.rs
 +++ b/fuzzers/forkserver_libafl_cc/src/main.rs
 @@ -3,11 +3,11 @@ use std::path::PathBuf;
@@ -172,6 +194,17 @@ index 5b131120..b225ddb5 100644
          .unwrap();
  
      if let Some(dynamic_map_size) = executor.coverage_map_size() {
+@@ -202,6 +226,10 @@ pub fn main() {
+         println!("We imported {} inputs from disk.", state.corpus().count());
+     }
+ 
++    let signal_dir = queue_dir.join("signal");
++    std::fs::create_dir_all(&signal_dir).unwrap();
++    std::fs::File::create(signal_dir.join("dryrun_finish")).unwrap();
++
+     state.add_metadata(tokens);
+ 
+     // Setup a mutational stage with a basic bytes mutator
 diff --git a/libafl_targets/src/forkserver.c b/libafl_targets/src/forkserver.c
 index 94ebc00e..249ed0de 100644
 --- a/libafl_targets/src/forkserver.c

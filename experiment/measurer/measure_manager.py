@@ -601,7 +601,20 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     if filestore_utils.cp(corpus_archive_src,
                           corpus_archive_dst,
                           expect_zero=False).retcode:
-        snapshot_logger.warning('Corpus not found for cycle: %d.', cycle)
+        dryrun_dir = posixpath.join(
+            experiment_utils.get_experiment_filestore_path(), 'dryrun')
+        opt_in = posixpath.join(dryrun_dir,
+                                f'dry_run_opt_in_{trial_num}')
+        done = posixpath.join(dryrun_dir, f'dry_run_done_{trial_num}')
+        if os.path.exists(done):
+            dry_status = 'dry run complete'
+        elif os.path.exists(opt_in):
+            dry_status = 'dry run in progress'
+        else:
+            dry_status = 'no dry run / runner not started yet'
+        snapshot_logger.warning(
+            'Corpus not found for cycle: %d. Runner status: %s.', cycle,
+            dry_status)
         return None
 
     snapshot_measurer.initialize_measurement_dirs()

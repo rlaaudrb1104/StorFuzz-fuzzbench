@@ -18,11 +18,51 @@ import os
 import subprocess
 import shutil
 import threading
+from pathlib import Path
 
 from fuzzers import utils
 from fuzzers.storfuzz.fuzzer import get_stats as libafl_get_stats
 
 FUZZER_BIN = '/libafl-stats/fuzzers/forkserver_libafl_cc/target/release/forkserver_libafl_cc'
+
+
+def _get_dry_run_paths():
+    """runner.py와 동일한 규칙으로 dry run 마커/sentinel 경로를 반환한다.
+
+    형식: {EXPERIMENT_FILESTORE}/{EXPERIMENT}/dryrun/dry_run_{opt_in|done}_{TRIAL_ID}
+    """
+    filestore = os.environ.get('EXPERIMENT_FILESTORE', '/tmp')
+    experiment = os.environ.get('EXPERIMENT', 'unknown')
+    trial_id = os.environ.get('TRIAL_ID', 'unknown')
+    dryrun_dir = os.path.join(filestore, experiment, 'dryrun')
+    os.makedirs(dryrun_dir, exist_ok=True)
+    opt_in = os.path.join(dryrun_dir, f'dry_run_opt_in_{trial_id}')
+    sentinel = os.path.join(dryrun_dir, f'dry_run_done_{trial_id}')
+    return opt_in, sentinel
+
+
+def _watch_libafl_dry_run(queue_dir, sentinel_path, stop_event):
+    """LibAFL forkserver의 dry run(초기화) 완료를 감지하는 백그라운드 스레드.
+
+    LibAFL은 초기화 완료 후 queue 디렉토리에 corpus 파일을 생성하기 시작한다.
+    메타데이터/락 파일이 아닌 실제 corpus 파일이 감지되면 sentinel을 생성한다.
+    """
+    print(f'[DRY_RUN] LibAFL dry run watcher started (queue_dir={queue_dir}).')
+    while not stop_event.is_set():
+        if os.path.isdir(queue_dir):
+            corpus_files = [
+                f for f in os.listdir(queue_dir)
+                if not f.endswith('.lafl_lock') and not f.endswith('.metadata')
+            ]
+            if corpus_files:
+                Path(sentinel_path).touch()
+                print(f'[DRY_RUN] LibAFL dry run complete '
+                      f'({len(corpus_files)} queue file(s) found). '
+                      f'Sentinel created: {sentinel_path}')
+                return
+        stop_event.wait(2)
+    print('[DRY_RUN] LibAFL dry run watcher stopped (fuzzer exited).')
+
 
 def _sync_queue(queue_dir, output_corpus, stop_event):
     """Periodically copy new corpus files from queue/ to output_corpus/."""
@@ -85,12 +125,26 @@ def fuzz(input_corpus, output_corpus, target_binary):
     """Run fuzzer."""
     prepare_fuzz_environment(input_corpus)
     dictionary_path = utils.get_dictionary_path(target_binary)
-    
+
     forkserver_out = output_corpus + '_forkserver'
     os.makedirs(forkserver_out, exist_ok=True)
     queue_dir = os.path.join(forkserver_out, 'queue')
 
-    # Start background sync thread
+    # Dry run opt-in: runner.py에 dry run(초기화)이 있음을 알림
+    dry_run_opt_in_path, dry_run_sentinel_path = _get_dry_run_paths()
+    Path(dry_run_opt_in_path).touch()
+    print(f'[DRY_RUN] LibAFL dry run opt-in marker created: {dry_run_opt_in_path}')
+
+    # Dry run 완료 감지 watcher 시작 (queue 파일 감시)
+    watcher_stop = threading.Event()
+    watcher = threading.Thread(
+        target=_watch_libafl_dry_run,
+        args=(queue_dir, dry_run_sentinel_path, watcher_stop),
+        daemon=True,
+    )
+    watcher.start()
+
+    # Corpus sync 스레드 (queue → output_corpus 복사)
     stop_event = threading.Event()
     sync_thread = threading.Thread(
         target=_sync_queue, args=(queue_dir, output_corpus, stop_event))
@@ -106,7 +160,7 @@ def fuzz(input_corpus, output_corpus, target_binary):
         '--',
         '@@',
     ]
-    
+
     if dictionary_path:
         command += (['-x', dictionary_path])
     fuzzer_env = os.environ.copy()
@@ -115,5 +169,7 @@ def fuzz(input_corpus, output_corpus, target_binary):
     try:
         subprocess.check_call(command, cwd=os.environ['OUT'], env=fuzzer_env)
     finally:
+        watcher_stop.set()
+        watcher.join(timeout=5)
         stop_event.set()
         sync_thread.join(timeout=5)

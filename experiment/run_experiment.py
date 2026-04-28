@@ -187,9 +187,17 @@ def read_and_validate_experiment_config(config_filename: str) -> Dict:
             Requirement(False, str, True, ''),
         'runner_num_cpu_cores':
             Requirement(False, int, False, ''),
+        'max_cycles':
+            Requirement(False, int, False, ''),
         'runner_memory':
             Requirement(False, str, False, ''),
         'micro_experiment':
+            Requirement(False, bool, False, ''),
+        'only_dryrun':
+            Requirement(False, bool, False, ''),
+        'analysis_mode':
+            Requirement(False, bool, False, ''),
+        'deterministic_seed':
             Requirement(False, bool, False, ''),
     }
 
@@ -325,6 +333,10 @@ def start_experiment(  # pylint: disable=too-many-arguments
         measurers_cpus: Optional[int] = None,
         runners_cpus: Optional[int] = None,
         runners_cpus_offset: Optional[int] = None,
+        max_cycles: Optional[int] = None,
+        only_dryrun: Optional[bool] = None,
+        analysis_mode: Optional[bool] = None,
+        deterministic_seed: Optional[bool] = None,
         region_coverage: bool = False,
         custom_seed_corpus_dir: Optional[str] = None):
     """Start a fuzzer benchmarking experiment."""
@@ -347,6 +359,8 @@ def start_experiment(  # pylint: disable=too-many-arguments
     config['measurers_cpus'] = measurers_cpus
     config['runners_cpus'] = runners_cpus
     config['runners_cpus_offset'] = runners_cpus_offset or 0
+    if max_cycles is not None:
+        config['max_cycles'] = max_cycles
     config['runner_machine_type'] = config.get('runner_machine_type',
                                                'n1-standard-1')
     config['runner_num_cpu_cores'] = config.get('runner_num_cpu_cores', 1)
@@ -357,6 +371,13 @@ def start_experiment(  # pylint: disable=too-many-arguments
     # experiments easier to run.
     config['runner_memory'] = config.get('runner_memory', '12GB')
     config['region_coverage'] = region_coverage
+    
+    if only_dryrun is not None:
+        config['only_dryrun'] = only_dryrun
+    if analysis_mode is not None:
+        config['analysis_mode'] = analysis_mode
+    if deterministic_seed is not None:
+        config['deterministic_seed'] = deterministic_seed
 
     config['custom_seed_corpus_dir'] = custom_seed_corpus_dir
     if config['custom_seed_corpus_dir']:
@@ -685,6 +706,11 @@ def run_experiment_main(args=None):
                         type=int,
                         default=0,
                         required=False)
+    parser.add_argument('--max-cycles',
+                        help='Stop each trial after this many fuzzing cycles '
+                        '(dry run excluded). Overrides config.yaml value.',
+                        type=int,
+                        required=False)
     parser.add_argument('-cs',
                         '--custom-seed-corpus-dir',
                         help='Path to the custom seed corpus',
@@ -793,6 +819,7 @@ def run_experiment_main(args=None):
                      measurers_cpus=measurers_cpus,
                      runners_cpus=runners_cpus,
                      runners_cpus_offset=runners_cpus_offset,
+                     max_cycles=args.max_cycles,
                      region_coverage=args.region_coverage,
                      custom_seed_corpus_dir=args.custom_seed_corpus_dir)
     return 0

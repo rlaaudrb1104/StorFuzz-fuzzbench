@@ -1,11 +1,11 @@
 # The number of trials of a fuzzer-benchmark pair.
-trials: 10
+trials: 5
 
 # The amount of time in seconds that each trial is run for.
 # 1 day = 24 * 60 * 60 = 86400
 # 4 days = 4 * 24 * 60 * 60 = 345600
 # 5 days = 5 * 24 * 60 * 60 = 432000
-max_total_time: 86400
+max_total_time: 432000
 
 # The location of the docker registry.
 # FIXME: Support custom docker registry.
@@ -14,11 +14,26 @@ docker_registry: gcr.io/fuzzbench
 
 # The local experiment folder that will store most of the experiment data.
 # Please use an absolute path.
-experiment_filestore: /tmp/experiment_data
+experiment_filestore: /tmp/test8/experiment_data
 
 # The local report folder where HTML reports and summary data will be stored.
 # Please use an absolute path.
-report_filestore: /tmp/report_data
+report_filestore: /tmp/test8/report_data
 
 # Flag that indicates this is a local experiment.
 local_experiment: true
+
+### custom parameters for angora ###
+
+# The number of fuzzing cycles for each trial(900s).
+# 1day = 24 * 60 * 60 / 900 = 96
+max_cycles: 48
+
+# true & false
+only_dryrun: false
+
+# true & false
+analysis_mode: true
+
+# true & false
+deterministic_seed: true

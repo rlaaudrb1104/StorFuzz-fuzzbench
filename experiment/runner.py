@@ -20,6 +20,7 @@ import os
 import posixpath
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -42,6 +43,43 @@ from common import utils
 
 NUM_RETRIES = 3
 RETRY_DELAY = 3
+
+# fuzz 프로세스를 외부에서 종료하기 위한 이벤트 (max_cycles 도달 시 set)
+_fuzzing_stop_event = threading.Event()
+
+
+def _get_dry_run_paths():
+    """이 trial 전용 dry run 마커/sentinel 경로를 반환한다.
+
+    형식: {experiment_filestore}/{experiment}/dryrun/dry_run_{opt_in|done}_{trial_id}
+
+    experiment_filestore, EXPERIMENT, TRIAL_ID 는 컨테이너 env var로 주입된다.
+    fuzzer.py도 동일한 env var로 경로를 구성하므로 경로가 자동으로 일치한다.
+    """
+    filestore = os.environ.get('EXPERIMENT_FILESTORE', '/tmp')
+    experiment = os.environ.get('EXPERIMENT', 'unknown')
+    trial_id = os.environ.get('TRIAL_ID', 'unknown')
+    dryrun_dir = os.path.join(filestore, experiment, 'dryrun')
+    os.makedirs(dryrun_dir, exist_ok=True)
+    opt_in = os.path.join(dryrun_dir, f'dry_run_opt_in_{trial_id}')
+    sentinel = os.path.join(dryrun_dir, f'dry_run_done_{trial_id}')
+    return opt_in, sentinel
+
+
+def _get_runner_done_path():
+    """runner가 모든 작업을 완료했음을 알리는 sentinel 파일 경로를 반환한다.
+
+    형식: {experiment_filestore}/{experiment}/dryrun/runner_done_{trial_id}
+
+    scheduler가 이 파일을 감지해 trial.time_ended를 즉시 설정한다.
+    max_cycles 등 조기 종료 시에도 measurer가 멈출 수 있도록 한다.
+    """
+    filestore = os.environ.get('EXPERIMENT_FILESTORE', '/tmp')
+    experiment = os.environ.get('EXPERIMENT', 'unknown')
+    trial_id = os.environ.get('TRIAL_ID', 'unknown')
+    dryrun_dir = os.path.join(filestore, experiment, 'dryrun')
+    os.makedirs(dryrun_dir, exist_ok=True)
+    return os.path.join(dryrun_dir, f'runner_done_{trial_id}')
 
 FUZZ_TARGET_DIR = os.getenv('OUT', '/out')
 
@@ -171,6 +209,23 @@ def _unpack_clusterfuzz_seed_corpus(fuzz_target_path, corpus_directory):
               seed_corpus_archive_path)
 
 
+def _signal_fuzz_process(proc, sig):
+    """프로세스 그룹 전체에 |sig|를 보낸다 (child 포함)."""
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, OSError):
+        try:
+            proc.send_signal(sig)
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+
+def _kill_fuzz_process(proc):
+    """프로세스 그룹 전체에 SIGINT을 보낸다 (child 포함)."""
+    _signal_fuzz_process(proc, signal.SIGINT)
+
+
 def run_fuzzer(max_total_time, log_filename):
     """Runs the fuzzer using its script. Logs stdout and stderr of the fuzzer
     script to |log_filename| if provided."""
@@ -188,45 +243,70 @@ def run_fuzzer(max_total_time, log_filename):
 
     runner_niceness = environment.get('RUNNER_NICENESS', 0)
 
-    # Set sanitizer options environment variables if this is a bug based
-    # benchmark.
     env = None
     benchmark = environment.get('BENCHMARK')
     if benchmark_config.get_config(benchmark).get('type') == 'bug':
         env = os.environ.copy()
         sanitizer.set_sanitizer_options(env, is_fuzz_run=True)
 
-    try:
-        # Because the runner is launched at a higher priority,
-        # set it back to the default(0) for fuzzing processes.
-        command = [
-            'nice', '-n',
-            str(0 - runner_niceness), 'python3', '-u', '-c',
-            (f'from fuzzers.{environment.get("FUZZER")} import fuzzer; '
-             'fuzzer.fuzz('
-             f'"{shlex.quote(input_corpus)}", "{shlex.quote(output_corpus)}", '
-             f'"{shlex.quote(target_binary)}")')
-        ]
+    command = [
+        'nice', '-n',
+        str(0 - runner_niceness), 'python3', '-u', '-c',
+        (f'from fuzzers.{environment.get("FUZZER")} import fuzzer; '
+         'fuzzer.fuzz('
+         f'"{shlex.quote(input_corpus)}", "{shlex.quote(output_corpus)}", '
+         f'"{shlex.quote(target_binary)}")')
+    ]
 
-        # Write output to stdout if user is fuzzing from command line.
-        # Otherwise, write output to the log file.
-        if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
-            new_process.execute(command,
-                                timeout=max_total_time,
-                                write_to_stdout=True,
-                                kill_children=True,
-                                env=env)
-        else:
-            with open(log_filename, 'wb') as log_file:
-                new_process.execute(command,
-                                    timeout=max_total_time,
-                                    output_file=log_file,
-                                    kill_children=True,
-                                    env=env)
-    except subprocess.CalledProcessError:
+    # subprocess.Popen으로 직접 실행해 외부에서 종료 가능하도록 함.
+    # os.setsid()로 새 프로세스 그룹을 만들어 child 프로세스까지 kill 가능.
+    log_file_handle = None
+    if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
+        proc = subprocess.Popen(command, env=env, preexec_fn=os.setsid)
+    else:
+        log_file_handle = open(log_filename, 'wb')  # noqa: WPS515
+        proc = subprocess.Popen(command,
+                                env=env,
+                                preexec_fn=os.setsid,
+                                stdout=log_file_handle,
+                                stderr=subprocess.STDOUT)
+
+    logs.info('[RUNNER] Fuzz process started (PID %d).', proc.pid)
+
+    # max_total_time 초과 시 자동 kill 타이머
+    kill_timer = None
+    if max_total_time is not None:
+        kill_timer = threading.Timer(max_total_time, _kill_fuzz_process, [proc])
+        kill_timer.start()
+
+    # _fuzzing_stop_event 감지 시 SIGINT로 종료하는 watcher 스레드
+    def _stop_watcher():
+        _fuzzing_stop_event.wait()
+        if proc.poll() is None:
+            logs.info('[RUNNER] Stop event received. Sending SIGINT to fuzz process (PID %d).',
+                      proc.pid)
+            _signal_fuzz_process(proc, signal.SIGINT)
+
+    stop_thread = threading.Thread(target=_stop_watcher, daemon=True)
+    stop_thread.start()
+
+    try:
+        proc.wait()
+    finally:
+        if kill_timer is not None:
+            kill_timer.cancel()
+        if log_file_handle is not None:
+            log_file_handle.close()
+
+    retcode = proc.returncode
+    # stop_event 또는 timeout으로 인한 종료는 정상 처리
+    intentional_stop = _fuzzing_stop_event.is_set() or (
+        kill_timer is not None and kill_timer.finished.is_set()
+        and not kill_timer.is_alive())
+    if retcode and not intentional_stop:
         global fuzzer_errored_out  # pylint:disable=invalid-name
         fuzzer_errored_out = True
-        logs.error('Fuzz process returned nonzero.')
+        logs.error('[RUNNER] Fuzz process returned nonzero: %d.', retcode)
 
 
 class TrialRunner:  # pylint: disable=too-many-instance-attributes
@@ -286,33 +366,100 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
     def conduct_trial(self):
         """Conduct the benchmarking trial."""
         self.initialize_directories()
-
-        logs.info('Starting trial.')
-
+        logs.info('[RUNNER] Starting trial.')
         self.set_up_corpus_directories()
 
-        max_total_time = environment.get('MAX_TOTAL_TIME')
-        args = (max_total_time, self.log_file)
+        # 이전 실행에서 남은 sentinel 파일 정리
+        dry_run_opt_in_path, dry_run_sentinel_path = _get_dry_run_paths()
+        logs.info('[RUNNER] Dry run paths: opt_in=%s  sentinel=%s',
+                  dry_run_opt_in_path, dry_run_sentinel_path)
+        for path in (dry_run_opt_in_path, dry_run_sentinel_path):
+            if os.path.exists(path):
+                os.remove(path)
 
-        # Sync initial corpus before fuzzing begins.
+        max_total_time = environment.get('MAX_TOTAL_TIME')
+        max_cycles_env = environment.get('MAX_CYCLES')
+        max_cycles = int(max_cycles_env) if max_cycles_env else None
+        if max_cycles is not None:
+            logs.info('[RUNNER] max_cycles=%d (snapshot_period=%ss).',
+                      max_cycles, experiment_utils.get_snapshot_seconds())
+
+        only_dryrun = bool(environment.get('ONLY_DRYRUN', False))
+        if only_dryrun:
+            logs.info('[ONLY_DRYRUN] only_dryrun=true: runner will stop after dry run completes.')
+
+        # ── cycle 0: dry run 시작 전 seed 상태 측정 ──────────────────────────
+        logs.info('[RUNNER] Doing initial corpus sync (cycle 0, before fuzzer starts).')
         self.do_sync()
 
+        # ── fuzzer 시작 ───────────────────────────────────────────────────────
+        args = (max_total_time, self.log_file)
         fuzz_thread = threading.Thread(target=run_fuzzer, args=args)
         fuzz_thread.start()
+
         if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
-            # Hack so that the fuzz_thread has some time to fail if something is
-            # wrong. Without this we will sleep for a long time before checking
-            # if the fuzz thread is alive.
             time.sleep(5)
 
-        while fuzz_thread.is_alive():
-            self.cycle += 1
-            self.sleep_until_next_sync()
-            self.do_sync()
+        # ── dry run opt-in 여부 판별: 퍼저 시작 후 최대 10초 대기 ─────────────
+        has_dry_run = False
+        for _ in range(10):
+            if os.path.exists(dry_run_opt_in_path):
+                has_dry_run = True
+                break
+            time.sleep(1)
 
-        logs.info('Doing final sync.')
-        self.do_sync()
+        # ── dry run 완료 대기 (cycle 카운터 진행 없음) ───────────────────────
+        if has_dry_run:
+            logs.info('[DRY_RUN] Opt-in detected. Waiting for dry run to '
+                      'complete before cycle counting starts.')
+            while fuzz_thread.is_alive():
+                if os.path.exists(dry_run_sentinel_path):
+                    logs.info('[DRY_RUN] Complete. Starting fuzzing cycle '
+                              'counting (cycle 1~).')
+                    # timing 리셋: dry run 경과 시간을 제외하고 900s 간격 유지
+                    self.last_sync_time = None
+                    break
+                logs.info('[DRY_RUN] Still waiting for sentinel...')
+                time.sleep(10)
+            else:
+                logs.info('[DRY_RUN] Fuzzer exited before dry run completed.')
+        else:
+            logs.info('[RUNNER] No dry run opt-in detected.')
+
+        # ── 메인 fuzzing sync 루프 (only_dryrun 시 스킵) ─────────────────────
+        if only_dryrun and has_dry_run:
+            logs.info('[ONLY_DRYRUN] Skipping main fuzzing cycle loop. '
+                      'Waiting for fuzzer to exit.')
+        else:
+            # ── 메인 fuzzing sync 루프 (cycle 1, 2, ...) ─────────────────────
+            fuzzing_cycles = 0
+            while fuzz_thread.is_alive():
+                self.cycle += 1
+                self.sleep_until_next_sync()
+                self.do_sync()
+                fuzzing_cycles += 1
+                logs.info('[SYNC] Fuzzing cycle %d/%s complete.',
+                          fuzzing_cycles,
+                          str(max_cycles) if max_cycles is not None else '∞')
+
+                if max_cycles is not None and fuzzing_cycles >= max_cycles:
+                    logs.info('[RUNNER] Reached max_cycles=%d. Stopping fuzzer.',
+                              max_cycles)
+                    _fuzzing_stop_event.set()
+                    break
+
         fuzz_thread.join()
+        self.cycle += 1
+        logs.info('[RUNNER] Doing final sync (cycle %d).', self.cycle)
+        self.do_sync()
+        
+        # runner 완료 sentinel: scheduler가 이를 감지해 trial.time_ended를 즉시 설정한다.
+        runner_done_path = _get_runner_done_path()
+        try:
+            open(runner_done_path, 'w').close()
+            logs.info('[RUNNER] Wrote runner_done sentinel: %s', runner_done_path)
+        except Exception:  # pylint: disable=broad-except
+            logs.warning('[RUNNER] Failed to write runner_done sentinel.')
 
     def sleep_until_next_sync(self):
         """Sleep until it is time to do the next sync."""
