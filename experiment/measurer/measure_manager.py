@@ -827,11 +827,12 @@ def measure_manager_loop(experiment: str,
 
         max_cycle = _time_to_cycle(max_total_time)
         queued_snapshots = set()
-        while not scheduler.all_trials_ended(experiment):
+        while True:
+            all_ended = scheduler.all_trials_ended(experiment)
             continue_inner_loop = measure_manager_inner_loop(
                 experiment, max_cycle, request_queue, response_queue,
                 queued_snapshots)
-            if not continue_inner_loop:
+            if not continue_inner_loop and all_ended:
                 break
             time.sleep(MEASUREMENT_LOOP_WAIT)
         logger.info('All trials ended. Ending measure manager loop')
