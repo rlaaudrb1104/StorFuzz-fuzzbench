@@ -155,9 +155,9 @@ RUN /llvm-project/LLVM-11.1.0-Linux.sh --skip-license --prefix=/usr/local
 RUN mkdir -p /angora && \
     cd /angora && \
     git clone \
-        --branch angora-snappy \
+        --branch angora-snappy-original \
         --recursive \
-        https://github.com/vusec/snappy \
+        https://github.com/lysgoup/snappy_reusing \
         source && \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     cmake -Ssource -Bbuild \

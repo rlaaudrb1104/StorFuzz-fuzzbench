@@ -158,9 +158,9 @@ COPY angora_snappy_reusing.patch /tmp/
 RUN mkdir -p /angora && \
     cd /angora && \
     git clone \
-        --branch angora-snappy \
+        --branch angora-snappy-reusing \
         --recursive \
-        https://github.com/vusec/snappy \
+        https://github.com/lysgoup/snappy_reusing \
         source && \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
     cmake -Ssource -Bbuild \
