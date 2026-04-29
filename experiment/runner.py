@@ -27,6 +27,7 @@ import tarfile
 import threading
 import time
 import zipfile
+import resource
 
 from common import benchmark_config
 from common import environment
@@ -47,6 +48,9 @@ RETRY_DELAY = 3
 # fuzz 프로세스를 외부에서 종료하기 위한 이벤트 (max_cycles 도달 시 set)
 _fuzzing_stop_event = threading.Event()
 
+
+def disable_core_dump():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 def _get_dry_run_paths():
     """이 trial 전용 dry run 마커/sentinel 경로를 반환한다.
@@ -268,6 +272,7 @@ def run_fuzzer(max_total_time, log_filename):
         proc = subprocess.Popen(command,
                                 env=env,
                                 preexec_fn=os.setsid,
+                                preexec_fn=disable_core_dump,
                                 stdout=log_file_handle,
                                 stderr=subprocess.STDOUT)
 
