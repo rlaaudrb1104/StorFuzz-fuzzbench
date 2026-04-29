@@ -49,7 +49,8 @@ RETRY_DELAY = 3
 _fuzzing_stop_event = threading.Event()
 
 
-def disable_core_dump():
+def _preexec():
+    os.setsid()
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 def _get_dry_run_paths():
@@ -266,13 +267,12 @@ def run_fuzzer(max_total_time, log_filename):
     # os.setsid()로 새 프로세스 그룹을 만들어 child 프로세스까지 kill 가능.
     log_file_handle = None
     if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
-        proc = subprocess.Popen(command, env=env, preexec_fn=os.setsid)
+        proc = subprocess.Popen(command, env=env, preexec_fn=_preexec)
     else:
         log_file_handle = open(log_filename, 'wb')  # noqa: WPS515
         proc = subprocess.Popen(command,
                                 env=env,
-                                preexec_fn=os.setsid,
-                                preexec_fn=disable_core_dump,
+                                preexec_fn=_preexec,
                                 stdout=log_file_handle,
                                 stderr=subprocess.STDOUT)
 
