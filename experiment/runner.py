@@ -27,7 +27,6 @@ import tarfile
 import threading
 import time
 import zipfile
-import resource
 
 from common import benchmark_config
 from common import environment
@@ -48,10 +47,6 @@ RETRY_DELAY = 3
 # fuzz 프로세스를 외부에서 종료하기 위한 이벤트 (max_cycles 도달 시 set)
 _fuzzing_stop_event = threading.Event()
 
-
-def _preexec():
-    os.setsid()
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 def _get_dry_run_paths():
     """이 trial 전용 dry run 마커/sentinel 경로를 반환한다.
@@ -267,12 +262,12 @@ def run_fuzzer(max_total_time, log_filename):
     # os.setsid()로 새 프로세스 그룹을 만들어 child 프로세스까지 kill 가능.
     log_file_handle = None
     if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
-        proc = subprocess.Popen(command, env=env, preexec_fn=_preexec)
+        proc = subprocess.Popen(command, env=env, preexec_fn=os.setsid)
     else:
         log_file_handle = open(log_filename, 'wb')  # noqa: WPS515
         proc = subprocess.Popen(command,
                                 env=env,
-                                preexec_fn=_preexec,
+                                preexec_fn=os.setsid,
                                 stdout=log_file_handle,
                                 stderr=subprocess.STDOUT)
 

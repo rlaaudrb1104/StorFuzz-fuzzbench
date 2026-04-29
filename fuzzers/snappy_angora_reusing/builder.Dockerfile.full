@@ -153,8 +153,6 @@ RUN /llvm-project/LLVM-11.1.0-Linux.sh --skip-license --prefix=/usr/local
 
 # Build Snappy-Reusing fuzzer
 
-# Apply patch to snappy-reusing source (patch file is UTF-16LE encoded)
-COPY angora_snappy_reusing.patch /tmp/
 RUN mkdir -p /angora && \
     cd /angora && \
     git clone \
